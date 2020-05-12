@@ -11,4 +11,5 @@ jobs:
           ref: release_bumper
       - name: Create local changes
         run: |
+          ls -al
           ./automation/release-bumber/release-bumper.sh
