@@ -8,7 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: release-bumper
+          ref: release_bumper
       - name: Create local changes
         run: |
           ./automation/release-bumber/release-bumper.sh
