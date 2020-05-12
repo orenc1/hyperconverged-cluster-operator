@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CONFIG_FILE="../../hack/config"
+CONFIG_FILE="hack/config"
 
 function main {
   declare -A CURRENT_VERSIONS
