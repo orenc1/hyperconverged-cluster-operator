@@ -10,4 +10,4 @@ jobs:
       - name: Create local changes
         run: |
           pwd
-          ./automation/release-bumber/release-bumper.sh
+          $(pwd)/automation/release-bumber/release-bumper.sh
