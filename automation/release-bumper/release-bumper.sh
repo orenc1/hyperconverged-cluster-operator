@@ -62,8 +62,7 @@ function get_updated_versions {
 }
 
 function get_latest_release() {
-  curl -H "Authorization: token ea1ead26d1e21da18771a734511453b1415a8ff1" \
-  --silent "https://api.github.com/repos/$1/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+  curl -s -L --silent "https://api.github.com/repos/$1/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
 function compare_versions() {
