@@ -62,7 +62,8 @@ function get_updated_versions {
 }
 
 function get_latest_release() {
-  curl -s -L --silent "https://api.github.com/repos/$1/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+#  curl -s -L --silent "https://api.github.com/repos/$1/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+  curl --silent -H "Authorization: token 57c6f8756df37b549ee0f42c1f9364a06f83dba4" https://api.github.com/repos/$1/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
 function compare_versions() {
@@ -77,7 +78,10 @@ function compare_versions() {
 function update_versions() {
   for component in "${SHOULD_UPDATED[@]}"; do
     echo $component;
+    sed -E -i "s/(""$component""_VERSION=).*/\1${UPDATED_VERSIONS[$component]}/" ${CONFIG_FILE}
   done;
+
+  ./hack/build-manifests.sh
 }
 
 main
