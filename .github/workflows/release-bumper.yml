@@ -1,5 +1,7 @@
 name: Auto-Bump Components Versions
-on: push
+on:
+  schedule:
+    - cron:  '48 17 * * *'
 
 jobs:
   build:
