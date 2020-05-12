@@ -8,4 +8,6 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Create local changes
-        run: ./automation/release-bumber/release-bumper.sh
+        run: |
+          pwd
+          ./automation/release-bumber/release-bumper.sh
