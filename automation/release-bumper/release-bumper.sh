@@ -22,6 +22,8 @@ function main {
   fi
 
   update_versions
+  exit
+  ./hack/build-manifests.sh
 }
 
 function get_current_versions {
@@ -58,7 +60,7 @@ function get_updated_versions {
   UPDATED_VERSIONS=()
   for component in "${!COMPONENTS_REPOS[@]}"; do
     UPDATED_VERSIONS[$component]=\"$(get_latest_release "${COMPONENTS_REPOS[$component]}")\";
-    if [ "UPDATED_VERSIONS[$component]" == "" ]; then
+    if [ -z "${UPDATED_VERSIONS[$component]}" ]; then
       echo "Unable to get an updated version of $component, aborting..."
       exit 1
     fi
@@ -72,19 +74,32 @@ function get_latest_release() {
 function compare_versions() {
   for component in "${!UPDATED_VERSIONS[@]}"; do
     if [ ! "${UPDATED_VERSIONS[$component]}" == "${CURRENT_VERSIONS[$component]}" ]; then
-      echo $component is outdated. current: "${CURRENT_VERSIONS[$component]}", updated: "${UPDATED_VERSIONS[$component]}"
-      SHOULD_UPDATED+=( $component )
+      echo "$component" is outdated. current: "${CURRENT_VERSIONS[$component]}", updated: "${UPDATED_VERSIONS[$component]}"
+      SHOULD_UPDATED+=( "$component" )
     fi;
   done;
 }
 
 function update_versions() {
   for component in "${SHOULD_UPDATED[@]}"; do
-    echo $component;
-    sed -E -i "s/(""$component""_VERSION=).*/\1${UPDATED_VERSIONS[$component]}/" ${CONFIG_FILE}
-  done;
+    echo INFO: Checking update for "$component";
 
-  ./hack/build-manifests.sh
+    # Check if pull request for that component and version already exists
+    search_pattern=$(echo "$component.*${UPDATED_VERSIONS[$component]}" | tr -d '"')
+    if curl -s -L  https://api.github.com/repos/orenc1/hyperconverged-cluster-operator/pulls | jq .[].title | \
+    grep -q "$search_pattern"; then
+      echo "An existing pull request of bumping $component to version ${UPDATED_VERSIONS[$component]} has been found.\
+Continuing to next component."
+      continue
+    else
+      echo "Updating $component to ${UPDATED_VERSIONS[$component]}."
+      sed -E -i "s/(""$component""_VERSION=).*/\1${UPDATED_VERSIONS[$component]}/" ${CONFIG_FILE}
+
+      echo "$component" > updated_component.txt
+      echo "${UPDATED_VERSIONS[$component]}" | tr -d '"' > updated_version.txt
+      break
+    fi
+  done;
 }
 
 main
