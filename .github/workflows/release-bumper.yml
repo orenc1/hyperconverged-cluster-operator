@@ -18,16 +18,14 @@ jobs:
         run: echo "::set-env name=UPDATED_VERSION::$(cat updated_version.txt)";
       - name: Remove temporary files
         run: rm -f updated_component.txt updated_version.txt
-      - name: Check if env var have been set correctly
-        run: echo "updated components is $UPDATED_COMPONENT and version is $UPDATED_VERSION"
       - uses: peter-evans/create-pull-request@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Bump $UPDATED_COMPONENT to $UPDATED_VERSION"
+          commit-message: "Bump ${{ env.UPDATED_COMPONENT }} to${{ env.UPDATED_VERSION }}"
           committer: GitHub <noreply@github.com>
-          title: "Bump $UPDATED_COMPONENT to $UPDATED_VERSION"
+          title: "Bump ${{ env.UPDATED_COMPONENT }} to ${{ env.UPDATED_VERSION }}"
           body: |
-            Bump $UPDATED_COMPONENT to $UPDATED_VERSION
+            Bump ${{ env.UPDATED_COMPONENT }} to ${{ env.UPDATED_VERSION }}
             Excecuted by HCO Release-Bumper Bot.
           assignees: orenc1
           reviewers: orenc1
