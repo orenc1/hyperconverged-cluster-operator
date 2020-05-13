@@ -22,7 +22,7 @@ function main {
   fi
 
   update_versions
-  exit
+
   ./hack/build-manifests.sh
 }
 
