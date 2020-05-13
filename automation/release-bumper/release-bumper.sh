@@ -58,6 +58,10 @@ function get_updated_versions {
   UPDATED_VERSIONS=()
   for component in "${!COMPONENTS_REPOS[@]}"; do
     UPDATED_VERSIONS[$component]=\"$(get_latest_release "${COMPONENTS_REPOS[$component]}")\";
+    if [ "UPDATED_VERSIONS[$component]" == "" ]; then
+      echo "Unable to get an updated version of $component, aborting..."
+      exit 1
+    fi
     done;
 }
 
