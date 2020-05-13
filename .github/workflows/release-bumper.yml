@@ -14,13 +14,14 @@ jobs:
           ./automation/release-bumper/release-bumper.sh
       - name: Set variables and remove temporary files
         run: |
-          echo '::set-env name=UPDATED_COMPONENT::$(cat updated_component.txt)'
-          echo '::set-env name=UPDATED_VERSION::$(cat updated_version.txt)'
+          ls -al
+          echo "::set-env name=UPDATED_COMPONENT::$(cat updated_component.txt)";
+          echo "::set-env name=UPDATED_VERSION::$(cat updated_version.txt)";
           rm -f updated_component.txt updated_version.txt
       - uses: peter-evans/create-pull-request@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: Bump $UPDATED_COMPONENT to $UPDATED_VERSION
+          commit-message: "Bump $UPDATED_COMPONENT to $UPDATED_VERSION"
           committer: GitHub <noreply@github.com>
           title: Bump $UPDATED_COMPONENT to $UPDATED_VERSION
           body: |
