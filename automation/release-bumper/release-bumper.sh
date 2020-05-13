@@ -23,6 +23,7 @@ function main {
 
   update_versions
 
+  echo "Executing build-manifests.sh..."
   ./hack/build-manifests.sh
 }
 

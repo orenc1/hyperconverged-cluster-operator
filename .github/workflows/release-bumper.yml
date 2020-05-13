@@ -21,7 +21,7 @@ jobs:
       - uses: peter-evans/create-pull-request@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Bump ${{ env.UPDATED_COMPONENT }} to${{ env.UPDATED_VERSION }}"
+          commit-message: "Bump ${{ env.UPDATED_COMPONENT }} to ${{ env.UPDATED_VERSION }}"
           committer: GitHub <noreply@github.com>
           title: "Bump ${{ env.UPDATED_COMPONENT }} to ${{ env.UPDATED_VERSION }}"
           body: |
