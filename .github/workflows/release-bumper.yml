@@ -12,8 +12,8 @@ jobs:
       - name: Check for new releases and update
         run: |
           ./automation/release-bumper/release-bumper.sh
-      - name: Set variables and remove temporary files
       - run: echo "::set-env name=UPDATED_COMPONENT::$(cat updated_component.txt)";
+        name: Set variables and remove temporary files
       - run: echo "::set-env name=UPDATED_VERSION::$(cat updated_version.txt)";
       - run: rm -f updated_component.txt updated_version.txt
       - uses: peter-evans/create-pull-request@v2
