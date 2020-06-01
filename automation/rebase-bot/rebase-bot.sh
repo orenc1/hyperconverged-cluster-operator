@@ -64,6 +64,14 @@ git remote add fork https://x-access-token:$COMMITTER_TOKEN@github.com/$HEAD_REP
 
 set -o xtrace
 
+
+# make sure branches are up-to-date
+git fetch origin $BASE_BRANCH
+git fetch fork $HEAD_BRANCH
+
+# do the rebase
+git checkout -b $HEAD_BRANCH fork/$HEAD_BRANCH
+
 ./hack/build-manifests.sh
 git status
 git add .
@@ -72,12 +80,6 @@ git commit -s -m "build-manifests"
 git status
 git branch
 
-# make sure branches are up-to-date
-git fetch origin $BASE_BRANCH
-git fetch fork $HEAD_BRANCH
-
-# do the rebase
-git checkout -b $HEAD_BRANCH fork/$HEAD_BRANCH
 git rebase origin/$BASE_BRANCH
 
 # push back
