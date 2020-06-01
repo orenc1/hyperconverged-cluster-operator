@@ -13,6 +13,6 @@ jobs:
         with:
           fetch-depth: 0
       - name: Build Manifests and Rebase
-        run: ./automation/rebase-bot/rebase-bot.yml
+        run: ./automation/rebase-bot/rebase-bot.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
