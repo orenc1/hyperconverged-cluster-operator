@@ -65,8 +65,12 @@ git remote add fork https://x-access-token:$COMMITTER_TOKEN@github.com/$HEAD_REP
 set -o xtrace
 
 ./hack/build-manifests.sh
+git status
 git add .
+git status
 git commit -s -m "build-manifests"
+git status
+git branch
 
 # make sure branches are up-to-date
 git fetch origin $BASE_BRANCH
