@@ -3,13 +3,13 @@ module github.com/kubevirt/hyperconverged-cluster-operator
 go 1.13
 
 require (
-	github.com/MarSik/kubevirt-ssp-operator v1.0.34
+	github.com/MarSik/kubevirt-ssp-operator v1.0.35
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/ghodss/yaml v1.0.1-0.20190212211648-25d852aebe32
 	github.com/go-logr/logr v0.1.0
 	github.com/go-openapi/spec v0.19.7
 	github.com/imdario/mergo v0.3.8
-	github.com/kubevirt/cluster-network-addons-operator v0.3.1-0.20200522084104-5b39d89400b4
+	github.com/kubevirt/cluster-network-addons-operator v0.3.1-0.20200527095331-9cc2867ac8dc
 	github.com/kubevirt/vm-import-operator v0.0.2-0.20200506145247-c753eb7a2259
 	github.com/onsi/ginkgo v1.12.0
 	github.com/onsi/gomega v1.10.0
@@ -24,7 +24,7 @@ require (
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/kube-openapi v0.0.0-20200204173128-addea2498afe
 	kubevirt.io/client-go v0.29.2
-	kubevirt.io/containerized-data-importer v1.17.0
+	kubevirt.io/containerized-data-importer v1.18.0
 	kubevirt.io/kubevirt v0.29.2
 	sigs.k8s.io/controller-runtime v0.6.0
 )
@@ -69,7 +69,7 @@ replace (
 	kubevirt.io/client-go => kubevirt.io/client-go v0.29.2
 )
 
-// Aligning with https://github.com/kubevirt/containerized-data-importer/blob/release-v1.17/go.mod
+// Aligning with https://github.com/kubevirt/containerized-data-importer/blob/release-v1.18.0
 replace (
 	github.com/openshift/api => github.com/openshift/api v0.0.0-20191219222812-2987a591a72c
 	github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20191125132246-f6563a70e19a
