@@ -96,7 +96,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newKubeVirtPriorityClass()
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtPriorityClass(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtPriorityClass(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				key, err := client.ObjectKeyFromObject(expectedResource)
 				Expect(err).ToNot(HaveOccurred())
@@ -111,7 +113,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newKubeVirtPriorityClass()
 				cl := initClient([]runtime.Object{expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtPriorityClass(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtPriorityClass(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				objectRef, err := reference.GetReference(r.scheme, expectedResource)
 				Expect(err).To(BeNil())
@@ -121,7 +125,9 @@ var _ = Describe("HyperconvergedController", func() {
 			DescribeTable("should update if something changed", func(modifiedResource *schedulingv1.PriorityClass) {
 				cl := initClient([]runtime.Object{modifiedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtPriorityClass(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtPriorityClass(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				expectedResource := newKubeVirtPriorityClass()
 				key, err := client.ObjectKeyFromObject(expectedResource)
@@ -167,6 +173,9 @@ var _ = Describe("HyperconvergedController", func() {
 			var hco *hcov1alpha1.HyperConverged
 			var req *hcoRequest
 
+			updatableKeys := [...]string{virtconfig.SmbiosConfigKey, virtconfig.MachineTypeKey, virtconfig.SELinuxLauncherTypeKey}
+			unupdatableKeys := [...]string{virtconfig.FeatureGatesKey, virtconfig.MigrationsConfigKey}
+
 			BeforeEach(func() {
 				hco = newHco()
 				req = newReq(hco)
@@ -179,7 +188,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newKubeVirtConfigForCR(req.instance, namespace)
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtConfig(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtConfig(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &corev1.ConfigMap{}
 				Expect(
@@ -197,7 +208,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtConfig(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtConfig(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -207,17 +220,27 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(hco.Status.RelatedObjects).To(ContainElement(*objectRef))
 			})
 
-			It("should update if outdated", func() {
+			It("should update only a few keys and only when in upgrade mode", func() {
 				expectedResource := newKubeVirtConfigForCR(hco, namespace)
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
 				outdatedResource := newKubeVirtConfigForCR(hco, namespace)
 				outdatedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", outdatedResource.Namespace, outdatedResource.Name)
+				// values we should update
 				outdatedResource.Data[virtconfig.SmbiosConfigKey] = "old-smbios-value-that-we-have-to-update"
 				outdatedResource.Data[virtconfig.MachineTypeKey] = "old-machinetype-value-that-we-have-to-update"
+				outdatedResource.Data[virtconfig.SELinuxLauncherTypeKey] = "old-selinuxlauncher-value-that-we-have-to-update"
+				// values we should preserve
+				outdatedResource.Data[virtconfig.FeatureGatesKey] = "old-featuregates-value-that-we-should-preserve"
+				outdatedResource.Data[virtconfig.MigrationsConfigKey] = "old-migrationsconfig-value-that-we-should-preserve"
 
 				cl := initClient([]runtime.Object{hco, outdatedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtConfig(req)).To(BeNil())
+
+				// force upgrade mode
+				r.upgradeMode = true
+				upgradeDone, err := r.ensureKubeVirtConfig(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &corev1.ConfigMap{}
 				Expect(
@@ -225,8 +248,49 @@ var _ = Describe("HyperconvergedController", func() {
 						types.NamespacedName{Name: expectedResource.Name, Namespace: expectedResource.Namespace},
 						foundResource),
 				).To(BeNil())
-				Expect(foundResource.Data).To(Not(Equal(outdatedResource.Data)))
-				Expect(foundResource.Data).To(Equal(expectedResource.Data))
+
+				for _, k := range updatableKeys {
+					Expect(foundResource.Data[k]).To(Not(Equal(outdatedResource.Data[k])))
+					Expect(foundResource.Data[k]).To(Equal(expectedResource.Data[k]))
+				}
+				for _, k := range unupdatableKeys {
+					Expect(foundResource.Data[k]).To(Equal(outdatedResource.Data[k]))
+					Expect(foundResource.Data[k]).To(Not(Equal(expectedResource.Data[k])))
+				}
+			})
+
+			It("should not touch it when not in in upgrade mode", func() {
+				expectedResource := newKubeVirtConfigForCR(hco, namespace)
+				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
+				outdatedResource := newKubeVirtConfigForCR(hco, namespace)
+				outdatedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", outdatedResource.Namespace, outdatedResource.Name)
+				// values we should update
+				outdatedResource.Data[virtconfig.SmbiosConfigKey] = "old-smbios-value-that-we-have-to-update"
+				outdatedResource.Data[virtconfig.MachineTypeKey] = "old-machinetype-value-that-we-have-to-update"
+				outdatedResource.Data[virtconfig.SELinuxLauncherTypeKey] = "old-selinuxlauncher-value-that-we-have-to-update"
+				// values we should preserve
+				outdatedResource.Data[virtconfig.FeatureGatesKey] = "old-featuregates-value-that-we-should-preserve"
+				outdatedResource.Data[virtconfig.MigrationsConfigKey] = "old-migrationsconfig-value-that-we-should-preserve"
+
+				cl := initClient([]runtime.Object{hco, outdatedResource})
+				r := initReconciler(cl)
+
+				// ensure that we are not in upgrade mode
+				r.upgradeMode = false
+
+				upgradeDone, err := r.ensureKubeVirtConfig(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
+
+				foundResource := &corev1.ConfigMap{}
+				Expect(
+					cl.Get(context.TODO(),
+						types.NamespacedName{Name: expectedResource.Name, Namespace: expectedResource.Namespace},
+						foundResource),
+				).To(BeNil())
+
+				Expect(foundResource.Data).To(Equal(outdatedResource.Data))
+				Expect(foundResource.Data).To(Not(Equal(expectedResource.Data)))
 			})
 		})
 
@@ -243,7 +307,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newKubeVirtStorageConfigForCR(hco, namespace)
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtStorageConfig(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtStorageConfig(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &corev1.ConfigMap{}
 				Expect(
@@ -261,7 +327,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtStorageConfig(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtStorageConfig(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -307,7 +375,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newKubeVirtForCR(hco, namespace)
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirt(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirt(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &kubevirtv1.KubeVirt{}
 				Expect(
@@ -325,7 +395,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirt(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirt(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -363,7 +435,9 @@ var _ = Describe("HyperconvergedController", func() {
 
 				cl := initClient([]runtime.Object{hco, missingUSResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirt(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirt(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &kubevirtv1.KubeVirt{}
 				Expect(
@@ -399,7 +473,9 @@ var _ = Describe("HyperconvergedController", func() {
 				}
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirt(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirt(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -448,7 +524,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newCDIForCR(hco, UndefinedNamespace)
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureCDI(req)).To(BeNil())
+				upgradeDone, err := r.ensureCDI(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &cdiv1alpha1.CDI{}
 				Expect(
@@ -466,7 +544,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureCDI(req)).To(BeNil())
+				upgradeDone, err := r.ensureCDI(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -504,7 +584,9 @@ var _ = Describe("HyperconvergedController", func() {
 
 				cl := initClient([]runtime.Object{hco, missingUSResource})
 				r := initReconciler(cl)
-				Expect(r.ensureCDI(req)).To(BeNil())
+				upgradeDone, err := r.ensureCDI(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &cdiv1alpha1.CDI{}
 				Expect(
@@ -540,7 +622,9 @@ var _ = Describe("HyperconvergedController", func() {
 				}
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureCDI(req)).To(BeNil())
+				upgradeDone, err := r.ensureCDI(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -589,7 +673,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newNetworkAddonsForCR(hco, UndefinedNamespace)
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureNetworkAddons(req)).To(BeNil())
+				upgradeDone, err := r.ensureNetworkAddons(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &networkaddonsv1alpha1.NetworkAddonsConfig{}
 				Expect(
@@ -602,6 +688,7 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(foundResource.Namespace).To(Equal(expectedResource.Namespace))
 				Expect(foundResource.Spec.Multus).To(Equal(&networkaddonsv1alpha1.Multus{}))
 				Expect(foundResource.Spec.LinuxBridge).To(Equal(&networkaddonsv1alpha1.LinuxBridge{}))
+				Expect(foundResource.Spec.KubeMacPool).To(Equal(&networkaddonsv1alpha1.KubeMacPool{}))
 			})
 
 			It("should find if present", func() {
@@ -609,7 +696,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureNetworkAddons(req)).To(BeNil())
+				upgradeDone, err := r.ensureNetworkAddons(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -663,7 +752,9 @@ var _ = Describe("HyperconvergedController", func() {
 				}
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureNetworkAddons(req)).To(BeNil())
+				upgradeDone, err := r.ensureNetworkAddons(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -712,7 +803,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newKubeVirtCommonTemplateBundleForCR(hco, OpenshiftNamespace)
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtCommonTemplateBundle(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtCommonTemplateBundle(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &sspv1.KubevirtCommonTemplatesBundle{}
 				Expect(
@@ -730,7 +823,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtCommonTemplateBundle(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtCommonTemplateBundle(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -818,7 +913,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newKubeVirtNodeLabellerBundleForCR(hco, namespace)
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtNodeLabellerBundle(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtNodeLabellerBundle(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &sspv1.KubevirtNodeLabellerBundle{}
 				Expect(
@@ -836,7 +933,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtNodeLabellerBundle(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtNodeLabellerBundle(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -949,7 +1048,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource := newKubeVirtTemplateValidatorForCR(hco, namespace)
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtTemplateValidator(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtTemplateValidator(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &sspv1.KubevirtTemplateValidator{}
 				Expect(
@@ -967,7 +1068,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/dummies/%s", expectedResource.Namespace, expectedResource.Name)
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureKubeVirtTemplateValidator(req)).To(BeNil())
+				upgradeDone, err := r.ensureKubeVirtTemplateValidator(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -1048,7 +1151,9 @@ var _ = Describe("HyperconvergedController", func() {
 
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
-				Expect(r.ensureIMSConfig(req)).ToNot(BeNil())
+				upgradeDone, err := r.ensureIMSConfig(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).ToNot(BeNil())
 			})
 		})
 
@@ -1067,7 +1172,9 @@ var _ = Describe("HyperconvergedController", func() {
 				cl := initClient([]runtime.Object{})
 				r := initReconciler(cl)
 
-				Expect(r.ensureVMImport(req)).To(BeNil())
+				upgradeDone, err := r.ensureVMImport(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				foundResource := &vmimportv1.VMImportConfig{}
 				Expect(
@@ -1085,7 +1192,9 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedResource.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/vmimportconfigs/%s", expectedResource.Namespace, expectedResource.Name)
 				cl := initClient([]runtime.Object{hco, expectedResource})
 				r := initReconciler(cl)
-				Expect(r.ensureVMImport(req)).To(BeNil())
+				upgradeDone, err := r.ensureVMImport(req)
+				Expect(upgradeDone).To(BeFalse())
+				Expect(err).To(BeNil())
 
 				// Check HCO's status
 				Expect(hco.Status.RelatedObjects).To(Not(BeNil()))
@@ -1533,7 +1642,7 @@ var _ = Describe("HyperconvergedController", func() {
 				).To(BeNil())
 
 				Expect(foundResource.Status.RelatedObjects).ToNot(BeNil())
-				Expect(len(foundResource.Status.RelatedObjects)).Should(Equal(9))
+				Expect(len(foundResource.Status.RelatedObjects)).Should(Equal(12))
 				Expect(foundResource.ObjectMeta.Finalizers).Should(Equal([]string{FinalizerName}))
 
 				// Now, delete HCO
@@ -1565,18 +1674,33 @@ var _ = Describe("HyperconvergedController", func() {
 			okConds := expected.hco.Status.Conditions
 
 			const (
-				OldVersion = "1.0.0"
-				NewVersion = "1.1.0"
+				oldVersion          = "1.0.0"
+				newVersion          = "1.1.0"
+				oldComponentVersion = "1.2.0"
+				newComponentVersion = "1.2.3"
 			)
 
 			BeforeEach(func() {
 				os.Setenv("CONVERSION_CONTAINER", "registry.redhat.io/container-native-virtualization/kubevirt-v2v-conversion:v2.0.0")
 				os.Setenv("VMWARE_CONTAINER", "registry.redhat.io/container-native-virtualization/kubevirt-vmware:v2.0.0}")
 				os.Setenv("OPERATOR_NAMESPACE", namespace)
+
+				expected.kv.Status.ObservedKubeVirtVersion = newComponentVersion
+				os.Setenv(util.KubevirtVersionEnvV, newComponentVersion)
+
+				expected.cdi.Status.ObservedVersion = newComponentVersion
+				os.Setenv(util.CdiVersionEnvV, newComponentVersion)
+
+				expected.cna.Status.ObservedVersion = newComponentVersion
+				os.Setenv(util.CnaoVersionEnvV, newComponentVersion)
+
+				expected.vmi.Status.ObservedVersion = newComponentVersion
+				os.Setenv(util.VMImportEnvV, newComponentVersion)
+
+				os.Setenv(util.HcoKvIoVersionName, newVersion)
 			})
 
 			It("Should update HCO Version Id in the CR on init", func() {
-				os.Setenv(util.HcoKvIoVersionName, OldVersion)
 
 				expected.hco.Status.Conditions = nil
 
@@ -1593,16 +1717,14 @@ var _ = Describe("HyperconvergedController", func() {
 				}
 				ver, ok := foundResource.Status.GetVersion(hcoVersionName)
 				Expect(ok).To(BeTrue())
-				Expect(ver).Should(Equal(OldVersion))
+				Expect(ver).Should(Equal(newVersion))
 
 				expected.hco.Status.Conditions = okConds
 			})
 
 			It("detect upgrade existing HCO Version", func() {
-				os.Setenv(util.HcoKvIoVersionName, NewVersion)
-
 				// old HCO Version is set
-				expected.hco.Status.UpdateVersion(hcoVersionName, OldVersion)
+				expected.hco.Status.UpdateVersion(hcoVersionName, oldVersion)
 
 				// CDI is not ready
 				expected.cdi.Status.Conditions = getGenericProgressingConditions()
@@ -1612,10 +1734,10 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(requeue).To(BeFalse())
 				checkAvailability(foundResource, corev1.ConditionFalse)
 
-				// check that the image Id is not set, because upgrade is not completed
+				// check that the HCO version is not set, because upgrade is not completed
 				ver, ok := foundResource.Status.GetVersion(hcoVersionName)
 				Expect(ok).To(BeTrue())
-				Expect(ver).Should(Equal(OldVersion))
+				Expect(ver).Should(Equal(oldVersion))
 
 				// now, complete the upgrade
 				expected.cdi.Status.Conditions = getGenericCompletedConditions()
@@ -1627,12 +1749,12 @@ var _ = Describe("HyperconvergedController", func() {
 				// check that the image Id is set, now, when upgrade is completed
 				ver, ok = foundResource.Status.GetVersion(hcoVersionName)
 				Expect(ok).To(BeTrue())
-				Expect(ver).Should(Equal(NewVersion))
+				Expect(ver).Should(Equal(newVersion))
+				cond := conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("False"))
 			})
 
 			It("detect upgrade w/o HCO Version", func() {
-				os.Setenv(util.HcoKvIoVersionName, NewVersion)
-
 				// CDI is not ready
 				expected.cdi.Status.Conditions = getGenericProgressingConditions()
 				expected.hco.Status.Versions = nil
@@ -1658,12 +1780,187 @@ var _ = Describe("HyperconvergedController", func() {
 				// check that the image Id is set, now, when upgrade is completed
 				ver, ok = foundResource.Status.GetVersion(hcoVersionName)
 				Expect(ok).To(BeTrue())
-				Expect(ver).Should(Equal(NewVersion))
+				Expect(ver).Should(Equal(newVersion))
+				cond := conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("False"))
+			})
+
+			It("don't complete upgrade if kubevirt version is not match to the kubevirt version env ver", func() {
+				os.Setenv(util.HcoKvIoVersionName, newVersion)
+
+				// old HCO Version is set
+				expected.hco.Status.UpdateVersion(hcoVersionName, oldVersion)
+
+				expected.kv.Status.ObservedKubeVirtVersion = oldComponentVersion
+
+				// CDI is not ready
+				expected.cdi.Status.Conditions = getGenericProgressingConditions()
+
+				cl := expected.initClient()
+				foundResource, requeue := doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionFalse)
+
+				// check that the image Id is not set, because upgrade is not completed
+				ver, ok := foundResource.Status.GetVersion(hcoVersionName)
+				Expect(ok).To(BeTrue())
+				Expect(ver).Should(Equal(oldVersion))
+				cond := conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("True"))
+				Expect(cond.Reason).Should(Equal("HCOUpgrading"))
+				Expect(cond.Message).Should(Equal("HCO is now upgrading to version " + newVersion))
+
+				// now, complete the upgrade
+				expected.cdi.Status.Conditions = getGenericCompletedConditions()
+				expected.kv.Status.ObservedKubeVirtVersion = newComponentVersion
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionTrue)
+
+				// check that the image Id is set, now, when upgrade is completed
+				ver, ok = foundResource.Status.GetVersion(hcoVersionName)
+				Expect(ok).To(BeTrue())
+				Expect(ver).Should(Equal(newVersion))
+				cond = conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("False"))
+				Expect(cond.Reason).Should(Equal(reconcileCompleted))
+				Expect(cond.Message).Should(Equal(reconcileCompletedMessage))
+			})
+
+			It("don't complete upgrade if CDI version is not match to the CDI version env ver", func() {
+				os.Setenv(util.HcoKvIoVersionName, newVersion)
+
+				// old HCO Version is set
+				expected.hco.Status.UpdateVersion(hcoVersionName, oldVersion)
+
+				expected.cdi.Status.ObservedVersion = oldComponentVersion
+
+				// CDI is not ready
+				expected.cdi.Status.Conditions = getGenericProgressingConditions()
+
+				cl := expected.initClient()
+				foundResource, requeue := doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionFalse)
+
+				// check that the image Id is not set, because upgrade is not completed
+				ver, ok := foundResource.Status.GetVersion(hcoVersionName)
+				Expect(ok).To(BeTrue())
+				Expect(ver).Should(Equal(oldVersion))
+				cond := conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("True"))
+				Expect(cond.Reason).Should(Equal("HCOUpgrading"))
+				Expect(cond.Message).Should(Equal("HCO is now upgrading to version " + newVersion))
+
+				// now, complete the upgrade
+				expected.cdi.Status.Conditions = getGenericCompletedConditions()
+				expected.cdi.Status.ObservedVersion = newComponentVersion
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionTrue)
+
+				// check that the image Id is set, now, when upgrade is completed
+				ver, ok = foundResource.Status.GetVersion(hcoVersionName)
+				Expect(ok).To(BeTrue())
+				Expect(ver).Should(Equal(newVersion))
+				cond = conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("False"))
+				Expect(cond.Reason).Should(Equal(reconcileCompleted))
+				Expect(cond.Message).Should(Equal(reconcileCompletedMessage))
+			})
+
+			It("don't complete upgrade if CNA version is not match to the CNA version env ver", func() {
+				os.Setenv(util.HcoKvIoVersionName, newVersion)
+
+				// old HCO Version is set
+				expected.hco.Status.UpdateVersion(hcoVersionName, oldVersion)
+
+				expected.cna.Status.ObservedVersion = oldComponentVersion
+
+				// CDI is not ready
+				expected.cdi.Status.Conditions = getGenericProgressingConditions()
+
+				cl := expected.initClient()
+				foundResource, requeue := doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionFalse)
+
+				// check that the image Id is not set, because upgrade is not completed
+				ver, ok := foundResource.Status.GetVersion(hcoVersionName)
+				Expect(ok).To(BeTrue())
+				Expect(ver).Should(Equal(oldVersion))
+				cond := conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("True"))
+				Expect(cond.Reason).Should(Equal("HCOUpgrading"))
+				Expect(cond.Message).Should(Equal("HCO is now upgrading to version " + newVersion))
+
+				// now, complete the upgrade
+				expected.cdi.Status.Conditions = getGenericCompletedConditions()
+				expected.cna.Status.ObservedVersion = newComponentVersion
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionTrue)
+
+				// check that the image Id is set, now, when upgrade is completed
+				ver, ok = foundResource.Status.GetVersion(hcoVersionName)
+				Expect(ok).To(BeTrue())
+				Expect(ver).Should(Equal(newVersion))
+				cond = conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("False"))
+				Expect(cond.Reason).Should(Equal(reconcileCompleted))
+				Expect(cond.Message).Should(Equal(reconcileCompletedMessage))
+			})
+
+			It("don't complete upgrade if VM-Import version is not match to the VM-Import version env ver", func() {
+				os.Setenv(util.HcoKvIoVersionName, newVersion)
+
+				// old HCO Version is set
+				expected.hco.Status.UpdateVersion(hcoVersionName, oldVersion)
+
+				expected.vmi.Status.ObservedVersion = ""
+
+				// CDI is not ready
+				expected.cdi.Status.Conditions = getGenericProgressingConditions()
+
+				cl := expected.initClient()
+				foundResource, requeue := doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionFalse)
+
+				// check that the image Id is not set, because upgrade is not completed
+				ver, ok := foundResource.Status.GetVersion(hcoVersionName)
+				Expect(ok).To(BeTrue())
+				Expect(ver).Should(Equal(oldVersion))
+				cond := conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("True"))
+				Expect(cond.Reason).Should(Equal("HCOUpgrading"))
+				Expect(cond.Message).Should(Equal("HCO is now upgrading to version " + newVersion))
+
+				// now, complete the upgrade
+				expected.cdi.Status.Conditions = getGenericCompletedConditions()
+				expected.vmi.Status.ObservedVersion = newComponentVersion
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionTrue)
+
+				// check that HCO version is set, now, when upgrade is completed
+				ver, ok = foundResource.Status.GetVersion(hcoVersionName)
+				Expect(ok).To(BeTrue())
+				Expect(ver).Should(Equal(newVersion))
+				cond = conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("False"))
+				Expect(cond.Reason).Should(Equal(reconcileCompleted))
+				Expect(cond.Message).Should(Equal(reconcileCompletedMessage))
 			})
 		})
 
 		Context("Aggregate Negative Conditions", func() {
 			const errorReason = "CdiTestError1"
+			os.Setenv(util.HcoKvIoVersionName, version.Version)
 			It("should be degraded when a component is degraded", func() {
 				expected := getBasicDeployment()
 				conditionsv1.SetStatusCondition(&expected.cdi.Status.Conditions, conditionsv1.Condition{
@@ -1962,6 +2259,7 @@ var _ = Describe("HyperconvergedController", func() {
 
 type basicExpected struct {
 	hco             *hcov1alpha1.HyperConverged
+	pc              *schedulingv1.PriorityClass
 	kvConfig        *corev1.ConfigMap
 	kvStorageConfig *corev1.ConfigMap
 	kv              *kubevirtv1.KubeVirt
@@ -1971,11 +2269,14 @@ type basicExpected struct {
 	kvNlb           *sspv1.KubevirtNodeLabellerBundle
 	kvTv            *sspv1.KubevirtTemplateValidator
 	vmi             *vmimportv1.VMImportConfig
+	kvMtAg          *sspv1.KubevirtMetricsAggregation
+	imsConfig       *corev1.ConfigMap
 }
 
 func (be basicExpected) toArray() []runtime.Object {
 	return []runtime.Object{
 		be.hco,
+		be.pc,
 		be.kvConfig,
 		be.kvStorageConfig,
 		be.kv,
@@ -1985,6 +2286,8 @@ func (be basicExpected) toArray() []runtime.Object {
 		be.kvNlb,
 		be.kvTv,
 		be.vmi,
+		be.kvMtAg,
+		be.imsConfig,
 	}
 }
 
@@ -2011,10 +2314,14 @@ func getBasicDeployment() *basicExpected {
 					Message: reconcileCompletedMessage,
 				},
 			},
+			Versions: hcov1alpha1.Versions{
+				{Name: hcoVersionName, Version: version.Version},
+			},
 		},
 	}
 	res.hco = hco
 
+	res.pc = newKubeVirtPriorityClass()
 	// These are all of the objects that we expect to "find" in the client because
 	// we already created them in a previous reconcile.
 	expectedKVConfig := newKubeVirtConfigForCR(hco, namespace)
@@ -2072,6 +2379,12 @@ func getBasicDeployment() *basicExpected {
 	expectedVMI.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/vmimportconfigs/%s", expectedVMI.Namespace, expectedVMI.Name)
 	expectedVMI.Status.Conditions = getGenericCompletedConditions()
 	res.vmi = expectedVMI
+
+	kvMtAg := newKubeVirtMetricsAggregationForCR(hco, namespace)
+	kvMtAg.Status.Conditions = getGenericCompletedConditions()
+	res.kvMtAg = kvMtAg
+
+	res.imsConfig = newIMSConfigForCR(hco, namespace)
 
 	return res
 }
