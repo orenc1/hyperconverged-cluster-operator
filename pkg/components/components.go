@@ -3,12 +3,19 @@ package components
 import (
 	"encoding/json"
 	"fmt"
+
+	"golang.org/x/tools/go/packages"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"time"
+
+	"sigs.k8s.io/controller-tools/pkg/loader"
+	"sigs.k8s.io/controller-tools/pkg/markers"
 
 	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
 
 	"github.com/blang/semver"
-	hcov1alpha1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1alpha1"
+	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1beta1"
 	csvVersion "github.com/operator-framework/api/pkg/lib/version"
 	csvv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -16,17 +23,21 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	extv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	crdgen "sigs.k8s.io/controller-tools/pkg/crd"
+	crdmarkers "sigs.k8s.io/controller-tools/pkg/crd/markers"
 )
 
 const (
 	hcoName           = "hyperconverged-cluster-operator"
 	hcoDeploymentName = "hco-operator"
-	hcoWebhookPath    = "/validate-hco-kubevirt-io-v1alpha1-hyperconverged"
+	hcoWebhookPath    = "/validate-hco-kubevirt-io-v1beta1-hyperconverged"
 )
 
-func GetDeployment(namespace, image, imagePullPolicy, conversionContainer, vmwareContainerString, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion string) appsv1.Deployment {
+func GetDeployment(namespace, image, imagePullPolicy, conversionContainer, vmwareContainerString, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion string, env []corev1.EnvVar) appsv1.Deployment {
 	return appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "apps/v1",
@@ -38,11 +49,11 @@ func GetDeployment(namespace, image, imagePullPolicy, conversionContainer, vmwar
 				"name": hcoName,
 			},
 		},
-		Spec: GetDeploymentSpec(namespace, image, imagePullPolicy, conversionContainer, vmwareContainerString, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion),
+		Spec: GetDeploymentSpec(namespace, image, imagePullPolicy, conversionContainer, vmwareContainerString, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion, env),
 	}
 }
 
-func GetDeploymentSpec(namespace, image, imagePullPolicy, conversionContainer, vmwareContainer, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion string) appsv1.DeploymentSpec {
+func GetDeploymentSpec(namespace, image, imagePullPolicy, conversionContainer, vmwareContainer, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion string, env []corev1.EnvVar) appsv1.DeploymentSpec {
 	return appsv1.DeploymentSpec{
 		Replicas: int32Ptr(1),
 		Selector: &metav1.LabelSelector{
@@ -78,7 +89,7 @@ func GetDeploymentSpec(namespace, image, imagePullPolicy, conversionContainer, v
 							PeriodSeconds:       5,
 							FailureThreshold:    1,
 						},
-						Env: []corev1.EnvVar{
+						Env: append([]corev1.EnvVar{
 							{
 								Name:  "KVM_EMULATION",
 								Value: "",
@@ -155,7 +166,7 @@ func GetDeploymentSpec(namespace, image, imagePullPolicy, conversionContainer, v
 								Name:  util.VMImportEnvV,
 								Value: vmImportVersion,
 							},
-						},
+						}, env...),
 					},
 				},
 			},
@@ -183,7 +194,7 @@ func GetClusterPermissions() []rbacv1.PolicyRule {
 	return []rbacv1.PolicyRule{
 		{
 			APIGroups: []string{
-				"hco.kubevirt.io",
+				util.APIVersionGroup,
 			},
 			Resources: []string{
 				"*",
@@ -430,6 +441,22 @@ func GetClusterPermissions() []rbacv1.PolicyRule {
 				"patch",
 			},
 		},
+		{
+			APIGroups: []string{
+				"console.openshift.io",
+			},
+			Resources: []string{
+				"consoleclidownloads",
+			},
+			Verbs: []string{
+				"get",
+				"list",
+				"watch",
+				"create",
+				"delete",
+				"update",
+			},
+		},
 	}
 }
 
@@ -476,61 +503,64 @@ func GetClusterRoleBinding(namespace string) rbacv1.ClusterRoleBinding {
 	}
 }
 
-func GetOperatorCRD(namespace string) *extv1beta1.CustomResourceDefinition {
-	return &extv1beta1.CustomResourceDefinition{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apiextensions.k8s.io/v1beta1",
-			Kind:       "CustomResourceDefinition",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "hyperconvergeds.hco.kubevirt.io",
-		},
-		Spec: extv1beta1.CustomResourceDefinitionSpec{
-			Group:   "hco.kubevirt.io",
-			Version: "v1alpha1",
-			Scope:   "Namespaced",
-
-			Versions: []extv1beta1.CustomResourceDefinitionVersion{
-				{
-					Name:    "v1alpha1",
-					Served:  true,
-					Storage: true,
-				},
-			},
-			Names: extv1beta1.CustomResourceDefinitionNames{
-				Plural:     "hyperconvergeds",
-				Singular:   "hyperconverged",
-				Kind:       "HyperConverged",
-				ShortNames: []string{"hco", "hcos"},
-				Categories: []string{"all"},
-			},
-
-			AdditionalPrinterColumns: []extv1beta1.CustomResourceColumnDefinition{
-				{Name: "Age", Type: "date", JSONPath: ".metadata.creationTimestamp"},
-			},
-
-			Subresources: &extv1beta1.CustomResourceSubresources{
-				Status: &extv1beta1.CustomResourceSubresourceStatus{},
-			},
-
-			Validation: &extv1beta1.CustomResourceValidation{
-				OpenAPIV3Schema: &extv1beta1.JSONSchemaProps{
-					Type: "object",
-					Properties: map[string]extv1beta1.JSONSchemaProps{
-						"metadata": {
-							Type: "object",
-							Properties: map[string]extv1beta1.JSONSchemaProps{
-								"name": extv1beta1.JSONSchemaProps{
-									Type:    "string",
-									Pattern: hcov1alpha1.HyperConvergedName,
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+func packageErrors(pkg *loader.Package, filterKinds ...packages.ErrorKind) error {
+	toSkip := make(map[packages.ErrorKind]struct{})
+	for _, errKind := range filterKinds {
+		toSkip[errKind] = struct{}{}
 	}
+	var outErr error
+	packages.Visit([]*packages.Package{pkg.Package}, nil, func(pkgRaw *packages.Package) {
+		for _, err := range pkgRaw.Errors {
+			if _, skip := toSkip[err.Kind]; skip {
+				continue
+			}
+			outErr = err
+		}
+	})
+	return outErr
+}
+
+func GetOperatorCRD(relPath string) *extv1.CustomResourceDefinition {
+	pkgs, err := loader.LoadRoots(relPath)
+	if err != nil {
+		panic(err)
+	}
+	reg := &markers.Registry{}
+	crdmarkers.Register(reg)
+
+	parser := &crdgen.Parser{
+		Collector: &markers.Collector{Registry: reg},
+		Checker:   &loader.TypeChecker{},
+	}
+	crdgen.AddKnownTypes(parser)
+	if len(pkgs) == 0 {
+		panic("Failed identifying packages")
+	}
+	for _, p := range pkgs {
+		parser.NeedPackage(p)
+	}
+	groupKind := schema.GroupKind{Kind: "HyperConverged", Group: "hco.kubevirt.io"}
+	parser.NeedCRDFor(groupKind, nil)
+	for _, p := range pkgs {
+		err = packageErrors(p, packages.TypeError)
+		if err != nil {
+			panic(err)
+		}
+	}
+	c := parser.CustomResourceDefinitions[groupKind]
+	// enforce validation of CR name to prevent multiple CRs
+	for _, v := range c.Spec.Versions {
+		v.Schema.OpenAPIV3Schema.Properties["metadata"] = extv1.JSONSchemaProps{
+			Type: "object",
+			Properties: map[string]extv1.JSONSchemaProps{
+				"name": {
+					Type:    "string",
+					Pattern: hcov1beta1.HyperConvergedName,
+				},
+			},
+		}
+	}
+	return &c
 }
 
 // TODO: remove once VMware provider is removed from HCO
@@ -662,16 +692,16 @@ func GetV2VOvirtProviderCRD() *extv1beta1.CustomResourceDefinition {
 	}
 }
 
-func GetOperatorCR() *hcov1alpha1.HyperConverged {
-	return &hcov1alpha1.HyperConverged{
+func GetOperatorCR() *hcov1beta1.HyperConverged {
+	return &hcov1beta1.HyperConverged{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "hco.kubevirt.io/v1alpha1",
+			APIVersion: "hco.kubevirt.io/v1beta1",
 			Kind:       "HyperConverged",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "kubevirt-hyperconverged",
 		},
-		Spec: hcov1alpha1.HyperConvergedSpec{
+		Spec: hcov1beta1.HyperConvergedSpec{
 			BareMetalPlatform:     false,
 			LocalStorageClassName: "",
 		},
@@ -679,12 +709,12 @@ func GetOperatorCR() *hcov1alpha1.HyperConverged {
 }
 
 // GetInstallStrategyBase returns the basics of an HCO InstallStrategy
-func GetInstallStrategyBase(namespace, image, imagePullPolicy, conversionContainer, vmwareContainer, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion string) *csvv1alpha1.StrategyDetailsDeployment {
+func GetInstallStrategyBase(namespace, image, imagePullPolicy, conversionContainer, vmwareContainer, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion string, env []corev1.EnvVar) *csvv1alpha1.StrategyDetailsDeployment {
 	return &csvv1alpha1.StrategyDetailsDeployment{
 		DeploymentSpecs: []csvv1alpha1.StrategyDeploymentSpec{
 			csvv1alpha1.StrategyDeploymentSpec{
 				Name: hcoDeploymentName,
-				Spec: GetDeploymentSpec(namespace, image, imagePullPolicy, conversionContainer, vmwareContainer, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion),
+				Spec: GetDeploymentSpec(namespace, image, imagePullPolicy, conversionContainer, vmwareContainer, smbios, machinetype, hcoKvIoVersion, kubevirtVersion, cdiVersion, cnaoVersion, sspVersion, nmoVersion, hppoVersion, vmImportVersion, env),
 			},
 		},
 		Permissions: []csvv1alpha1.StrategyDeploymentPermissions{},
@@ -701,7 +731,7 @@ func GetInstallStrategyBase(namespace, image, imagePullPolicy, conversionContain
 func GetCSVBase(name, namespace, displayName, description, image, replaces string, version semver.Version, crdDisplay string) *csvv1alpha1.ClusterServiceVersion {
 	almExamples, _ := json.Marshal([]interface{}{
 		map[string]interface{}{
-			"apiVersion": "hco.kubevirt.io/v1alpha1",
+			"apiVersion": "hco.kubevirt.io/v1beta1",
 			"kind":       "HyperConverged",
 			"metadata": map[string]string{
 				"name":      "kubevirt-hyperconverged",
@@ -729,10 +759,11 @@ func GetCSVBase(name, namespace, displayName, description, image, replaces strin
 			admissionregistrationv1.RuleWithOperations{
 				Operations: []admissionregistrationv1.OperationType{
 					admissionregistrationv1.Create,
+					admissionregistrationv1.Delete,
 				},
 				Rule: admissionregistrationv1.Rule{
-					APIGroups:   []string{"hco.kubevirt.io"},
-					APIVersions: []string{"v1alpha1"},
+					APIGroups:   []string{util.APIVersionGroup},
+					APIVersions: []string{util.APIVersionAlpha, util.APIVersionBeta},
 					Resources:   []string{"hyperconvergeds"},
 				},
 			},
@@ -831,7 +862,7 @@ func GetCSVBase(name, namespace, displayName, description, image, replaces strin
 				Owned: []csvv1alpha1.CRDDescription{
 					{
 						Name:        "hyperconvergeds.hco.kubevirt.io",
-						Version:     "v1alpha1",
+						Version:     util.CurrentAPIVersion,
 						Kind:        "HyperConverged",
 						DisplayName: crdDisplay + " Deployment",
 						Description: "Represents the deployment of " + crdDisplay,

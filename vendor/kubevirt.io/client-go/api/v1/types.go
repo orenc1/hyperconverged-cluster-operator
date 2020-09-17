@@ -33,6 +33,7 @@ import (
 	"fmt"
 
 	k8sv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -466,8 +467,24 @@ const (
 	// if a particular node is alive and hence should be available for new
 	// virtual machine instance scheduling. Used on Node.
 	VirtHandlerHeartbeat string = "kubevirt.io/heartbeat"
+	// Namespace recommended by Kubernetes for commonly recognized labels
+	AppLabelPrefix = "app.kubernetes.io"
+	// This label is commonly used by 3rd party management tools to identify
+	// an application's name.
+	AppNameLabel = AppLabelPrefix + "/name"
+	// This label is commonly used by 3rd party management tools to identify
+	// an application's version.
+	AppVersionLabel = AppLabelPrefix + "/version"
+	// This label is commonly used by 3rd party management tools to identify
+	// a higher level application.
+	AppPartOfLabel = AppLabelPrefix + "/part-of"
+	// This label is commonly used by 3rd party management tools to identify
+	// the component this application is a part of.
+	AppComponentLabel = AppLabelPrefix + "/component"
+	// This label identifies each resource as part of KubeVirt
+	AppComponent = "kubevirt"
 	// This label will be set on all resources created by the operator
-	ManagedByLabel              = "app.kubernetes.io/managed-by"
+	ManagedByLabel              = AppLabelPrefix + "/managed-by"
 	ManagedByLabelOperatorValue = "kubevirt-operator"
 	// This annotation represents the kubevirt version for an install strategy configmap.
 	InstallStrategyVersionAnnotation = "kubevirt.io/install-strategy-version"
@@ -918,6 +935,8 @@ const (
 //
 // +k8s:openapi-gen=true
 type VirtualMachineStatus struct {
+	// SnapshotInProgress is the name of the VirtualMachineSnapshot currently executing
+	SnapshotInProgress *string `json:"snapshotInProgress,omitempty"`
 	// Created indicates if the virtual machine is created in the cluster
 	Created bool `json:"created,omitempty"`
 	// Ready indicates if the virtual machine is running and ready
@@ -1003,11 +1022,25 @@ const (
 // +k8s:openapi-gen=true
 type DriverCache string
 
+//
+// +k8s:openapi-gen=true
+type DriverIO string
+
 const (
 	// CacheNone - I/O from the guest is not cached on the host, but may be kept in a writeback disk cache.
 	CacheNone DriverCache = "none"
 	// CacheWriteThrough - I/O from the guest is cached on the host but written through to the physical medium.
 	CacheWriteThrough DriverCache = "writethrough"
+
+	// IOThreads - User mode based threads with a shared lock that perform I/O tasks. Can impact performance but offers
+	// more predictable behaviour. This method is also takes fewer CPU cycles to submit I/O requests.
+	IOThreads DriverIO = "threads"
+	// IONative - Kernel native I/O tasks (AIO) offer a better performance but can block the VM if the file is not fully
+	// allocated so this method recommended only when the backing file/disk/etc is fully preallocated.
+	IONative DriverIO = "native"
+	// IODefault - Fallback to the default value from the kernel. With recent Kernel versions (for example RHEL-7) the
+	// default is AIO.
+	IODefault DriverIO = "default"
 )
 
 // Handler defines a specific action that should be taken
@@ -1073,12 +1106,16 @@ type KubeVirtList struct {
 	Items           []KubeVirt `json:"items"`
 }
 
+// ---
+// +k8s:openapi-gen=true
 type KubeVirtSelfSignConfiguration struct {
 	CARotateInterval   *metav1.Duration `json:"caRotateInterval,omitempty"`
 	CertRotateInterval *metav1.Duration `json:"certRotateInterval,omitempty"`
 	CAOverlapInterval  *metav1.Duration `json:"caOverlapInterval,omitempty"`
 }
 
+// ---
+// +k8s:openapi-gen=true
 type KubeVirtCertificateRotateStrategy struct {
 	SelfSigned *KubeVirtSelfSignConfiguration `json:"selfSigned,omitempty"`
 }
@@ -1109,6 +1146,20 @@ type KubeVirtSpec struct {
 	UninstallStrategy KubeVirtUninstallStrategy `json:"uninstallStrategy,omitempty"`
 
 	CertificateRotationStrategy KubeVirtCertificateRotateStrategy `json:"certificateRotateStrategy,omitempty"`
+
+	// Designate the apps.kubevirt.io/version label for KubeVirt components.
+	// Useful if KubeVirt is included as part of a product.
+	// If ProductVersion is not specified, KubeVirt's version will be used.
+	ProductVersion string `json:"productVersion,omitempty"`
+
+	// Designate the apps.kubevirt.io/part-of label for KubeVirt components.
+	// Useful if KubeVirt is included as part of a product.
+	// If ProductName is not specified, the part-of label will be omitted.
+	ProductName string `json:"productName,omitempty"`
+
+	// holds kubevirt configurations.
+	// same as the virt-configMap
+	Configuration KubeVirtConfiguration `json:"configuration,omitempty"`
 }
 
 type KubeVirtUninstallStrategy string
@@ -1276,4 +1327,63 @@ type RenameOptions struct {
 	metav1.TypeMeta `json:",inline"`
 	NewName         string  `json:"newName"`
 	OldName         *string `json:"oldName,omitempty"`
+}
+
+// KubeVirtConfiguration holds all kubevirt configurations
+// +k8s:openapi-gen=true
+type KubeVirtConfiguration struct {
+	CPUModel                    string                  `json:"cpuModel,omitempty"`
+	CPURequest                  *resource.Quantity      `json:"cpuRequest,string,omitempty"`
+	DeveloperConfiguration      *DeveloperConfiguration `json:"developerConfiguration,omitempty"`
+	EmulatedMachines            []string                `json:"emulatedMachines,omitempty"`
+	ImagePullPolicy             k8sv1.PullPolicy        `json:"imagePullPolicy,omitempty"`
+	MigrationConfiguration      *MigrationConfiguration `json:"migrations,omitempty"`
+	MachineType                 string                  `json:"machineType,omitempty"`
+	NetworkConfiguration        *NetworkConfiguration   `json:"network,omitempty"`
+	OVMFPath                    string                  `json:"ovmfPath,omitempty"`
+	SELinuxLauncherType         string                  `json:"selinuxLauncherType,omitempty"`
+	SMBIOSConfig                *SMBiosConfiguration    `json:"smbios,omitempty"`
+	SupportedGuestAgentVersions []string                `json:"supportedGuestAgentVersions,omitempty"`
+	MemBalloonStatsPeriod       int                     `json:"memBalloonStatsPeriod,omitempty"`
+}
+
+// ---
+// +k8s:openapi-gen=true
+type SMBiosConfiguration struct {
+	Manufacturer string `json:"manufacturer,omitempty"`
+	Product      string `json:"product,omitempty"`
+	Version      string `json:"version,omitempty"`
+	Sku          string `json:"sku,omitempty"`
+	Family       string `json:"family,omitempty"`
+}
+
+// MigrationConfiguration holds migration options
+// +k8s:openapi-gen=true
+type MigrationConfiguration struct {
+	AllowAutoConverge                 bool               `json:"allowAutoConverge,string"`
+	BandwidthPerMigration             *resource.Quantity `json:"bandwidthPerMigration,omitempty"`
+	CompletionTimeoutPerGiB           *int64             `json:"completionTimeoutPerGiB,string,omitempty"`
+	NodeDrainTaintKey                 *string            `json:"nodeDrainTaintKey,omitempty"`
+	ParallelOutboundMigrationsPerNode *uint32            `json:"parallelOutboundMigrationsPerNode,string,omitempty"`
+	ParallelMigrationsPerCluster      *uint32            `json:"parallelMigrationsPerCluster,string,omitempty"`
+	ProgressTimeout                   *int64             `json:"progressTimeout,string,omitempty"`
+	UnsafeMigrationOverride           bool               `json:"unsafeMigrationOverride,string"`
+}
+
+// DeveloperConfiguration holds developer options
+// +k8s:openapi-gen=true
+type DeveloperConfiguration struct {
+	FeatureGates           []string          `json:"featureGates,omitempty"`
+	LessPVCSpaceToleration int               `json:"pvcTolerateLessSpaceUpToPercent,string,omitempty"`
+	MemoryOvercommit       int               `json:"memoryOvercommit,string,omitempty"`
+	NodeSelectors          map[string]string `json:"nodeSelectors,omitempty"`
+	UseEmulation           bool              `json:"useEmulation,string,omitempty"`
+}
+
+// NetworkConfiguration holds network options
+// +k8s:openapi-gen=true
+type NetworkConfiguration struct {
+	NetworkInterface                  string `json:"defaultNetworkInterface,omitempty"`
+	PermitSlirpInterface              bool   `json:"permitSlirpInterface,string,omitempty"`
+	PermitBridgeInterfaceOnPodNetwork bool   `json:"permitBridgeInterfaceOnPodNetwork,string,omitempty"`
 }

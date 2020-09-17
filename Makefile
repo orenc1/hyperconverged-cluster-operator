@@ -20,11 +20,17 @@ sanity:
 	go fmt ./...
 	go mod vendor
 	./hack/build-manifests.sh
-	git diff -G'^[^    createdAt: ]' --exit-code
+	git difftool -y --trust-exit-code --extcmd=./hack/diff-csv.sh
 
 build: $(SOURCES) ## Build binary from source
 	go build -i -ldflags="-s -w" -o _out/hyperconverged-cluster-operator ./cmd/hyperconverged-cluster-operator
 	go build -i -ldflags="-s -w" -o _out/csv-merger tools/csv-merger/csv-merger.go
+
+build-manifests:
+	./hack/build-manifests.sh
+
+build-manifests-prev:
+	RELEASE_DELTA=1 ./hack/build-manifests.sh
 
 install:
 	go install ./cmd/...
@@ -96,6 +102,9 @@ build-push-all: container-build-operator container-push-operator container-build
 upgrade-test:
 	./hack/upgrade-test.sh
 
+kubevirt-nightly-test:
+	./hack/kubevirt-nightly-test.sh
+
 dump-state:
 	./hack/dump-state.sh 
 
@@ -120,9 +129,17 @@ test: test-unit
 charts:
 	./hack/build-charts.sh
 
+local:
+	./hack/make_local.sh
+
+deploy_cr:
+	./hack/deploy_only_cr.sh
+
 .PHONY: start \
 		clean \
 		build \
+		build-manifests \
+		build-manifests-prev \
 		help \
 		hack-clean \
 		container-build \
@@ -144,3 +161,6 @@ charts:
 		test-functional \
 		test-functional-prow \
 		charts \
+		kubevirt-nightly-test \
+		local \
+		deploy_cr \

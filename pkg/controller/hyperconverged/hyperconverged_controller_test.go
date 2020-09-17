@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"os"
 	"time"
 
-	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/kubevirt/hyperconverged-cluster-operator/version"
 
 	. "github.com/onsi/ginkgo"
@@ -27,7 +27,8 @@ import (
 	"github.com/openshift/custom-resource-status/testlib"
 
 	// networkaddonsnames "github.com/kubevirt/cluster-network-addons-operator/pkg/names"
-	hcov1alpha1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1alpha1"
+	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1beta1"
+	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubevirtv1 "kubevirt.io/client-go/api/v1"
@@ -40,6 +41,7 @@ const (
 )
 
 var _ = Describe("HyperconvergedController", func() {
+
 	Describe("Reconcile HyperConverged", func() {
 		Context("HCO Lifecycle", func() {
 
@@ -59,13 +61,13 @@ var _ = Describe("HyperconvergedController", func() {
 			})
 
 			It("should ignore invalid requests", func() {
-				hco := &hcov1alpha1.HyperConverged{
+				hco := &hcov1beta1.HyperConverged{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "invalid",
 						Namespace: "invalid",
 					},
-					Spec: hcov1alpha1.HyperConvergedSpec{},
-					Status: hcov1alpha1.HyperConvergedStatus{
+					Spec: hcov1beta1.HyperConvergedSpec{},
+					Status: hcov1beta1.HyperConvergedStatus{
 						Conditions: []conditionsv1.Condition{},
 					},
 				}
@@ -84,7 +86,7 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(res).Should(Equal(reconcile.Result{}))
 
 				// Get the HCO
-				foundResource := &hcov1alpha1.HyperConverged{}
+				foundResource := &hcov1beta1.HyperConverged{}
 				Expect(
 					cl.Get(context.TODO(),
 						types.NamespacedName{Name: hco.Name, Namespace: hco.Namespace},
@@ -92,7 +94,7 @@ var _ = Describe("HyperconvergedController", func() {
 				).To(BeNil())
 				// Check conditions
 				Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
-					Type:    hcov1alpha1.ConditionReconcileComplete,
+					Type:    hcov1beta1.ConditionReconcileComplete,
 					Status:  corev1.ConditionFalse,
 					Reason:  invalidRequestReason,
 					Message: fmt.Sprintf(invalidRequestMessageFormat, name, namespace),
@@ -110,7 +112,7 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(res).Should(Equal(reconcile.Result{Requeue: true}))
 
 				// Get the HCO
-				foundResource := &hcov1alpha1.HyperConverged{}
+				foundResource := &hcov1beta1.HyperConverged{}
 				Expect(
 					cl.Get(context.TODO(),
 						types.NamespacedName{Name: hco.Name, Namespace: hco.Namespace},
@@ -118,7 +120,7 @@ var _ = Describe("HyperconvergedController", func() {
 				).To(BeNil())
 				// Check conditions
 				Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
-					Type:    hcov1alpha1.ConditionReconcileComplete,
+					Type:    hcov1beta1.ConditionReconcileComplete,
 					Status:  corev1.ConditionUnknown,
 					Reason:  reconcileInit,
 					Message: reconcileInitMessage,
@@ -150,16 +152,16 @@ var _ = Describe("HyperconvergedController", func() {
 			})
 
 			It("should find all managed resources", func() {
-				hco := &hcov1alpha1.HyperConverged{
+				hco := &hcov1beta1.HyperConverged{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      name,
 						Namespace: namespace,
 					},
-					Spec: hcov1alpha1.HyperConvergedSpec{},
-					Status: hcov1alpha1.HyperConvergedStatus{
+					Spec: hcov1beta1.HyperConvergedSpec{},
+					Status: hcov1beta1.HyperConvergedStatus{
 						Conditions: []conditionsv1.Condition{
 							conditionsv1.Condition{
-								Type:    hcov1alpha1.ConditionReconcileComplete,
+								Type:    hcov1beta1.ConditionReconcileComplete,
 								Status:  corev1.ConditionTrue,
 								Reason:  reconcileCompleted,
 								Message: reconcileCompletedMessage,
@@ -173,20 +175,24 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedKVConfig.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/configmaps/%s", expectedKVConfig.Namespace, expectedKVConfig.Name)
 				expectedKVStorageConfig := newKubeVirtStorageConfigForCR(hco, namespace)
 				expectedKVStorageConfig.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/configmaps/%s", expectedKVStorageConfig.Namespace, expectedKVStorageConfig.Name)
-				expectedKV := newKubeVirtForCR(hco, namespace)
+				expectedKVStorageRole := newKubeVirtStorageRoleForCR(hco, namespace)
+				expectedKVStorageRole.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/roles/%s", expectedKVStorageRole.Namespace, expectedKVStorageRole.Name)
+				expectedKVStorageRoleBinding := newKubeVirtStorageRoleBindingForCR(hco, namespace)
+				expectedKVStorageRoleBinding.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/rolebindings/%s", expectedKVStorageRoleBinding.Namespace, expectedKVStorageRoleBinding.Name)
+				expectedKV := hco.NewKubeVirt(namespace)
 				expectedKV.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/kubevirts/%s", expectedKV.Namespace, expectedKV.Name)
-				expectedCDI := newCDIForCR(hco, UndefinedNamespace)
+				expectedCDI := hco.NewCDI()
 				expectedCDI.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/cdis/%s", expectedCDI.Namespace, expectedCDI.Name)
-				expectedCNA := newNetworkAddonsForCR(hco, UndefinedNamespace)
+				expectedCNA := hco.NewNetworkAddons()
 				expectedCNA.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/cnas/%s", expectedCNA.Namespace, expectedCNA.Name)
-				expectedKVCTB := newKubeVirtCommonTemplateBundleForCR(hco, OpenshiftNamespace)
+				expectedKVCTB := hco.NewKubeVirtCommonTemplateBundle()
 				expectedKVCTB.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/ctbs/%s", expectedKVCTB.Namespace, expectedKVCTB.Name)
 				expectedKVNLB := newKubeVirtNodeLabellerBundleForCR(hco, namespace)
 				expectedKVNLB.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/nlb/%s", expectedKVNLB.Namespace, expectedKVNLB.Name)
 				expectedKVTV := newKubeVirtTemplateValidatorForCR(hco, namespace)
 				expectedKVTV.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/tv/%s", expectedKVTV.Namespace, expectedKVTV.Name)
 				// Add all of the objects to the client
-				cl := initClient([]runtime.Object{hco, expectedKVConfig, expectedKVStorageConfig, expectedKV, expectedCDI, expectedCNA, expectedKVCTB, expectedKVNLB, expectedKVTV})
+				cl := initClient([]runtime.Object{hco, expectedKVConfig, expectedKVStorageConfig, expectedKVStorageRole, expectedKVStorageRoleBinding, expectedKV, expectedCDI, expectedCNA, expectedKVCTB, expectedKVNLB, expectedKVTV})
 				r := initReconciler(cl)
 
 				// Do the reconcile
@@ -195,7 +201,7 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(res).Should(Equal(reconcile.Result{}))
 
 				// Get the HCO
-				foundResource := &hcov1alpha1.HyperConverged{}
+				foundResource := &hcov1beta1.HyperConverged{}
 				Expect(
 					cl.Get(context.TODO(),
 						types.NamespacedName{Name: hco.Name, Namespace: hco.Namespace},
@@ -203,46 +209,43 @@ var _ = Describe("HyperconvergedController", func() {
 				).To(BeNil())
 				// Check conditions
 				Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
-					Type:    hcov1alpha1.ConditionReconcileComplete,
+					Type:    hcov1beta1.ConditionReconcileComplete,
 					Status:  corev1.ConditionTrue,
 					Reason:  reconcileCompleted,
 					Message: reconcileCompletedMessage,
 				})))
-				// TODO: temporary ignoring KubevirtTemplateValidator conditions
-				/*
-					// Why Template validator? Because it is the last to be checked, so the last missing overwrites everything
-					Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
-						Type:    conditionsv1.ConditionAvailable,
-						Status:  corev1.ConditionFalse,
-						Reason:  "KubevirtTemplateValidatorConditions",
-						Message: "KubevirtTemplateValidator resource has no conditions",
-					})))
-					Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
-						Type:    conditionsv1.ConditionProgressing,
-						Status:  corev1.ConditionTrue,
-						Reason:  "KubevirtTemplateValidatorConditions",
-						Message: "KubevirtTemplateValidator resource has no conditions",
-					})))
-					Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
-						Type:    conditionsv1.ConditionUpgradeable,
-						Status:  corev1.ConditionFalse,
-						Reason:  "KubevirtTemplateValidatorConditions",
-						Message: "KubevirtTemplateValidator resource has no conditions",
-					})))
-				*/
+				// Why Template validator? Because it is the last to be checked, so the last missing overwrites everything
+				Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
+					Type:    conditionsv1.ConditionAvailable,
+					Status:  corev1.ConditionFalse,
+					Reason:  "KubevirtTemplateValidatorConditions",
+					Message: "KubevirtTemplateValidator resource has no conditions",
+				})))
+				Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
+					Type:    conditionsv1.ConditionProgressing,
+					Status:  corev1.ConditionTrue,
+					Reason:  "KubevirtTemplateValidatorConditions",
+					Message: "KubevirtTemplateValidator resource has no conditions",
+				})))
+				Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
+					Type:    conditionsv1.ConditionUpgradeable,
+					Status:  corev1.ConditionFalse,
+					Reason:  "KubevirtTemplateValidatorConditions",
+					Message: "KubevirtTemplateValidator resource has no conditions",
+				})))
 			})
 
 			It("should complete when components are finished", func() {
-				hco := &hcov1alpha1.HyperConverged{
+				hco := &hcov1beta1.HyperConverged{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      name,
 						Namespace: namespace,
 					},
-					Spec: hcov1alpha1.HyperConvergedSpec{},
-					Status: hcov1alpha1.HyperConvergedStatus{
+					Spec: hcov1beta1.HyperConvergedSpec{},
+					Status: hcov1beta1.HyperConvergedStatus{
 						Conditions: []conditionsv1.Condition{
 							conditionsv1.Condition{
-								Type:    hcov1alpha1.ConditionReconcileComplete,
+								Type:    hcov1beta1.ConditionReconcileComplete,
 								Status:  corev1.ConditionTrue,
 								Reason:  reconcileCompleted,
 								Message: reconcileCompletedMessage,
@@ -256,7 +259,11 @@ var _ = Describe("HyperconvergedController", func() {
 				expectedKVConfig.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/configmaps/%s", expectedKVConfig.Namespace, expectedKVConfig.Name)
 				expectedKVStorageConfig := newKubeVirtStorageConfigForCR(hco, namespace)
 				expectedKVStorageConfig.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/configmaps/%s", expectedKVStorageConfig.Namespace, expectedKVStorageConfig.Name)
-				expectedKV := newKubeVirtForCR(hco, namespace)
+				expectedKVStorageRole := newKubeVirtStorageRoleForCR(hco, namespace)
+				expectedKVStorageRole.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/role/%s", expectedKVStorageRole.Namespace, expectedKVStorageRole.Name)
+				expectedKVStorageRoleBinding := newKubeVirtStorageRoleBindingForCR(hco, namespace)
+				expectedKVStorageRoleBinding.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/role/%s", expectedKVStorageRoleBinding.Namespace, expectedKVStorageRoleBinding.Name)
+				expectedKV := hco.NewKubeVirt(namespace)
 				expectedKV.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/kubevirts/%s", expectedKV.Namespace, expectedKV.Name)
 				expectedKV.Status.Conditions = []kubevirtv1.KubeVirtCondition{
 					{
@@ -272,7 +279,7 @@ var _ = Describe("HyperconvergedController", func() {
 						Status: corev1.ConditionFalse,
 					},
 				}
-				expectedCDI := newCDIForCR(hco, UndefinedNamespace)
+				expectedCDI := hco.NewCDI()
 				expectedCDI.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/cdis/%s", expectedCDI.Namespace, expectedCDI.Name)
 				expectedCDI.Status.Conditions = []conditionsv1.Condition{
 					{
@@ -288,7 +295,7 @@ var _ = Describe("HyperconvergedController", func() {
 						Status: corev1.ConditionFalse,
 					},
 				}
-				expectedCNA := newNetworkAddonsForCR(hco, UndefinedNamespace)
+				expectedCNA := hco.NewNetworkAddons()
 				expectedCNA.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/cnas/%s", expectedCNA.Namespace, expectedCNA.Name)
 				expectedCNA.Status.Conditions = []conditionsv1.Condition{
 					{
@@ -304,7 +311,7 @@ var _ = Describe("HyperconvergedController", func() {
 						Status: corev1.ConditionFalse,
 					},
 				}
-				expectedKVCTB := newKubeVirtCommonTemplateBundleForCR(hco, OpenshiftNamespace)
+				expectedKVCTB := hco.NewKubeVirtCommonTemplateBundle()
 				expectedKVCTB.ObjectMeta.SelfLink = fmt.Sprintf("/apis/v1/namespaces/%s/ctbs/%s", expectedKVCTB.Namespace, expectedKVCTB.Name)
 				expectedKVCTB.Status.Conditions = getGenericCompletedConditions()
 				expectedKVNLB := newKubeVirtNodeLabellerBundleForCR(hco, namespace)
@@ -323,7 +330,7 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(res).Should(Equal(reconcile.Result{}))
 
 				// Get the HCO
-				foundResource := &hcov1alpha1.HyperConverged{}
+				foundResource := &hcov1beta1.HyperConverged{}
 				Expect(
 					cl.Get(context.TODO(),
 						types.NamespacedName{Name: hco.Name, Namespace: hco.Namespace},
@@ -331,7 +338,7 @@ var _ = Describe("HyperconvergedController", func() {
 				).To(BeNil())
 				// Check conditions
 				Expect(foundResource.Status.Conditions).To(ContainElement(testlib.RepresentCondition(conditionsv1.Condition{
-					Type:    hcov1alpha1.ConditionReconcileComplete,
+					Type:    hcov1beta1.ConditionReconcileComplete,
 					Status:  corev1.ConditionTrue,
 					Reason:  reconcileCompleted,
 					Message: reconcileCompletedMessage,
@@ -406,56 +413,44 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(requeue).To(BeFalse())
 				checkAvailability(foundResource, corev1.ConditionTrue)
 
-				// TODO: temporary avoid checking conditions on KubevirtCommonTemplatesBundle because it's currently
-				// broken on k8s. Revert this when we will be able to fix it
-				/*
-					origConds = expected.kvCtb.Status.Conditions
-					expected.kvCtb.Status.Conditions = expected.cdi.Status.Conditions[1:]
-					cl = expected.initClient()
-					foundResource, requeue = doReconcile(cl, expected.hco)
-					Expect(requeue).To(BeFalse())
-					checkAvailability(foundResource, corev1.ConditionFalse)
+				origConds = expected.kvCtb.Status.Conditions
+				expected.kvCtb.Status.Conditions = expected.cdi.Status.Conditions[1:]
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionFalse)
 
-					expected.kvCtb.Status.Conditions = origConds
-					cl = expected.initClient()
-					foundResource, requeue = doReconcile(cl, expected.hco)
-					Expect(requeue).To(BeFalse())
-					checkAvailability(foundResource, corev1.ConditionTrue)
-				*/
+				expected.kvCtb.Status.Conditions = origConds
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionTrue)
 
-				// TODO: temporary avoid checking conditions on KubevirtNodeLabellerBundle because it's currently
-				// broken on k8s. Revert this when we will be able to fix it
-				/*
-					origConds = expected.kvNlb.Status.Conditions
-					expected.kvNlb.Status.Conditions = expected.cdi.Status.Conditions[1:]
-					cl = expected.initClient()
-					foundResource, requeue = doReconcile(cl, expected.hco)
-					Expect(requeue).To(BeFalse())
-					checkAvailability(foundResource, corev1.ConditionFalse)
+				origConds = expected.kvNlb.Status.Conditions
+				expected.kvNlb.Status.Conditions = expected.cdi.Status.Conditions[1:]
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionFalse)
 
-					expected.kvNlb.Status.Conditions = origConds
-					cl = expected.initClient()
-					foundResource, requeue = doReconcile(cl, expected.hco)
-					Expect(requeue).To(BeFalse())
-					checkAvailability(foundResource, corev1.ConditionTrue)
-				*/
+				expected.kvNlb.Status.Conditions = origConds
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionTrue)
 
-				// TODO: temporary avoid checking conditions on KubevirtTemplateValidator because it's currently
-				// broken on k8s. Revert this when we will be able to fix it
-				/*
-					origConds = expected.kvTv.Status.Conditions
-					expected.kvTv.Status.Conditions = expected.cdi.Status.Conditions[1:]
-					cl = expected.initClient()
-					foundResource, requeue = doReconcile(cl, expected.hco)
-					Expect(requeue).To(BeFalse())
-					checkAvailability(foundResource, corev1.ConditionFalse)
+				origConds = expected.kvTv.Status.Conditions
+				expected.kvTv.Status.Conditions = expected.cdi.Status.Conditions[1:]
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionFalse)
 
-					expected.kvTv.Status.Conditions = origConds
-					cl = expected.initClient()
-					foundResource, requeue = doReconcile(cl, expected.hco)
-					Expect(requeue).To(BeFalse())
-					checkAvailability(foundResource, corev1.ConditionTrue)
-				*/
+				expected.kvTv.Status.Conditions = origConds
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionTrue)
 			})
 
 			It(`should delete HCO`, func() {
@@ -468,7 +463,7 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(err).To(BeNil())
 				Expect(res).Should(Equal(reconcile.Result{}))
 
-				foundResource := &hcov1alpha1.HyperConverged{}
+				foundResource := &hcov1beta1.HyperConverged{}
 				Expect(
 					cl.Get(context.TODO(),
 						types.NamespacedName{Name: expected.hco.Name, Namespace: expected.hco.Namespace},
@@ -476,7 +471,7 @@ var _ = Describe("HyperconvergedController", func() {
 				).To(BeNil())
 
 				Expect(foundResource.Status.RelatedObjects).ToNot(BeNil())
-				Expect(len(foundResource.Status.RelatedObjects)).Should(Equal(12))
+				Expect(len(foundResource.Status.RelatedObjects)).Should(Equal(15))
 				Expect(foundResource.ObjectMeta.Finalizers).Should(Equal([]string{FinalizerName}))
 
 				// Now, delete HCO
@@ -490,7 +485,7 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(err).To(BeNil())
 				Expect(res).Should(Equal(reconcile.Result{Requeue: true}))
 
-				foundResource = &hcov1alpha1.HyperConverged{}
+				foundResource = &hcov1beta1.HyperConverged{}
 				Expect(
 					cl.Get(context.TODO(),
 						types.NamespacedName{Name: expected.hco.Name, Namespace: expected.hco.Namespace},
@@ -511,7 +506,7 @@ var _ = Describe("HyperconvergedController", func() {
 				os.Setenv("CONVERSION_CONTAINER", "registry.redhat.io/container-native-virtualization/kubevirt-v2v-conversion:v2.0.0")
 				os.Setenv("VMWARE_CONTAINER", "registry.redhat.io/container-native-virtualization/kubevirt-vmware:v2.0.0}")
 				os.Setenv("OPERATOR_NAMESPACE", namespace)
-				os.Setenv(util.HcoKvIoVersionName, version.Version)
+				os.Setenv(hcoutil.HcoKvIoVersionName, version.Version)
 			})
 
 			It("Should set required fields on init", func() {
@@ -521,7 +516,7 @@ var _ = Describe("HyperconvergedController", func() {
 				foundResource, requeue := doReconcile(cl, expected.hco)
 				Expect(requeue).To(BeTrue())
 
-				Expect(foundResource.ObjectMeta.Labels[appLabel]).Should(Equal(hcov1alpha1.HyperConvergedName))
+				Expect(foundResource.ObjectMeta.Labels[hcoutil.AppLabel]).Should(Equal(hcoutil.HyperConvergedName))
 			})
 
 			It("Should set required fields when missing", func() {
@@ -531,7 +526,7 @@ var _ = Describe("HyperconvergedController", func() {
 				foundResource, requeue := doReconcile(cl, expected.hco)
 				Expect(requeue).To(BeFalse())
 
-				Expect(foundResource.ObjectMeta.Labels[appLabel]).Should(Equal(hcov1alpha1.HyperConvergedName))
+				Expect(foundResource.ObjectMeta.Labels[hcoutil.AppLabel]).Should(Equal(hcoutil.HyperConvergedName))
 			})
 		})
 
@@ -553,18 +548,24 @@ var _ = Describe("HyperconvergedController", func() {
 				os.Setenv("OPERATOR_NAMESPACE", namespace)
 
 				expected.kv.Status.ObservedKubeVirtVersion = newComponentVersion
-				os.Setenv(util.KubevirtVersionEnvV, newComponentVersion)
+				os.Setenv(hcoutil.KubevirtVersionEnvV, newComponentVersion)
 
 				expected.cdi.Status.ObservedVersion = newComponentVersion
-				os.Setenv(util.CdiVersionEnvV, newComponentVersion)
+				os.Setenv(hcoutil.CdiVersionEnvV, newComponentVersion)
 
 				expected.cna.Status.ObservedVersion = newComponentVersion
-				os.Setenv(util.CnaoVersionEnvV, newComponentVersion)
+				os.Setenv(hcoutil.CnaoVersionEnvV, newComponentVersion)
 
 				expected.vmi.Status.ObservedVersion = newComponentVersion
-				os.Setenv(util.VMImportEnvV, newComponentVersion)
+				os.Setenv(hcoutil.VMImportEnvV, newComponentVersion)
 
-				os.Setenv(util.HcoKvIoVersionName, newVersion)
+				os.Setenv(hcoutil.SspVersionEnvV, newComponentVersion)
+				expected.kvCtb.Status.ObservedVersion = newComponentVersion
+				expected.kvNlb.Status.ObservedVersion = newComponentVersion
+				expected.kvTv.Status.ObservedVersion = newComponentVersion
+				expected.kvMtAg.Status.ObservedVersion = newComponentVersion
+
+				os.Setenv(hcoutil.HcoKvIoVersionName, newVersion)
 
 				expected.hco.Status.Conditions = origConditions
 			})
@@ -665,7 +666,7 @@ var _ = Describe("HyperconvergedController", func() {
 			})
 
 			It("don't complete upgrade if kubevirt version is not match to the kubevirt version env ver", func() {
-				os.Setenv(util.HcoKvIoVersionName, newVersion)
+				os.Setenv(hcoutil.HcoKvIoVersionName, newVersion)
 
 				// old HCO Version is set
 				expected.hco.Status.UpdateVersion(hcoVersionName, oldVersion)
@@ -689,8 +690,32 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(cond.Reason).Should(Equal("HCOUpgrading"))
 				Expect(cond.Message).Should(Equal("HCO is now upgrading to version " + newVersion))
 
-				// now, complete the upgrade
+				hcoReady, err := checkHcoReady()
+				Expect(err).To(BeNil())
+				Expect(hcoReady).To(BeFalse())
+
+				// check that the upgrade is not done if the not all the versions are match.
+				// Conditions are valid
 				expected.cdi.Status.Conditions = getGenericCompletedConditions()
+				cl = expected.initClient()
+				foundResource, requeue = doReconcile(cl, expected.hco)
+				Expect(requeue).To(BeFalse())
+				checkAvailability(foundResource, corev1.ConditionTrue)
+
+				// check that the image Id is set, now, when upgrade is completed
+				ver, ok = foundResource.Status.GetVersion(hcoVersionName)
+				Expect(ok).To(BeTrue())
+				Expect(ver).Should(Equal(oldVersion))
+				cond = conditionsv1.FindStatusCondition(foundResource.Status.Conditions, conditionsv1.ConditionProgressing)
+				Expect(cond.Status).Should(BeEquivalentTo("True"))
+				Expect(cond.Reason).Should(Equal("HCOUpgrading"))
+				Expect(cond.Message).Should(Equal("HCO is now upgrading to version " + newVersion))
+
+				hcoReady, err = checkHcoReady()
+				Expect(err).To(BeNil())
+				Expect(hcoReady).To(BeFalse())
+
+				// now, complete the upgrade
 				expected.kv.Status.ObservedKubeVirtVersion = newComponentVersion
 				cl = expected.initClient()
 				foundResource, requeue = doReconcile(cl, expected.hco)
@@ -705,10 +730,14 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(cond.Status).Should(BeEquivalentTo("False"))
 				Expect(cond.Reason).Should(Equal(reconcileCompleted))
 				Expect(cond.Message).Should(Equal(reconcileCompletedMessage))
+
+				hcoReady, err = checkHcoReady()
+				Expect(err).To(BeNil())
+				Expect(hcoReady).To(BeTrue())
 			})
 
 			It("don't complete upgrade if CDI version is not match to the CDI version env ver", func() {
-				os.Setenv(util.HcoKvIoVersionName, newVersion)
+				os.Setenv(hcoutil.HcoKvIoVersionName, newVersion)
 
 				// old HCO Version is set
 				expected.hco.Status.UpdateVersion(hcoVersionName, oldVersion)
@@ -723,6 +752,10 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(requeue).To(BeFalse())
 				checkAvailability(foundResource, corev1.ConditionFalse)
 
+				hcoReady, err := checkHcoReady()
+				Expect(err).To(BeNil())
+				Expect(hcoReady).To(BeFalse())
+
 				// check that the image Id is not set, because upgrade is not completed
 				ver, ok := foundResource.Status.GetVersion(hcoVersionName)
 				Expect(ok).To(BeTrue())
@@ -731,6 +764,10 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(cond.Status).Should(BeEquivalentTo("True"))
 				Expect(cond.Reason).Should(Equal("HCOUpgrading"))
 				Expect(cond.Message).Should(Equal("HCO is now upgrading to version " + newVersion))
+
+				hcoReady, err = checkHcoReady()
+				Expect(err).To(BeNil())
+				Expect(hcoReady).To(BeFalse())
 
 				// now, complete the upgrade
 				expected.cdi.Status.Conditions = getGenericCompletedConditions()
@@ -748,10 +785,15 @@ var _ = Describe("HyperconvergedController", func() {
 				Expect(cond.Status).Should(BeEquivalentTo("False"))
 				Expect(cond.Reason).Should(Equal(reconcileCompleted))
 				Expect(cond.Message).Should(Equal(reconcileCompletedMessage))
+
+				hcoReady, err = checkHcoReady()
+				Expect(err).To(BeNil())
+				Expect(hcoReady).To(BeTrue())
+
 			})
 
 			It("don't complete upgrade if CNA version is not match to the CNA version env ver", func() {
-				os.Setenv(util.HcoKvIoVersionName, newVersion)
+				os.Setenv(hcoutil.HcoKvIoVersionName, newVersion)
 
 				// old HCO Version is set
 				expected.hco.Status.UpdateVersion(hcoVersionName, oldVersion)
@@ -794,7 +836,7 @@ var _ = Describe("HyperconvergedController", func() {
 			})
 
 			It("don't complete upgrade if VM-Import version is not match to the VM-Import version env ver", func() {
-				os.Setenv(util.HcoKvIoVersionName, newVersion)
+				os.Setenv(hcoutil.HcoKvIoVersionName, newVersion)
 
 				// old HCO Version is set
 				expected.hco.Status.UpdateVersion(hcoVersionName, oldVersion)
@@ -839,7 +881,7 @@ var _ = Describe("HyperconvergedController", func() {
 
 		Context("Aggregate Negative Conditions", func() {
 			const errorReason = "CdiTestError1"
-			os.Setenv(util.HcoKvIoVersionName, version.Version)
+			os.Setenv(hcoutil.HcoKvIoVersionName, version.Version)
 			It("should be degraded when a component is degraded", func() {
 				expected := getBasicDeployment()
 				conditionsv1.SetStatusCondition(&expected.cdi.Status.Conditions, conditionsv1.Condition{
@@ -857,7 +899,7 @@ var _ = Describe("HyperconvergedController", func() {
 				wr.SetIndent("", "  ")
 				_ = wr.Encode(conditions)
 
-				cd := conditionsv1.FindStatusCondition(conditions, hcov1alpha1.ConditionReconcileComplete)
+				cd := conditionsv1.FindStatusCondition(conditions, hcov1beta1.ConditionReconcileComplete)
 				Expect(cd.Status).Should(BeEquivalentTo("True"))
 				Expect(cd.Reason).Should(Equal(reconcileCompleted))
 				cd = conditionsv1.FindStatusCondition(conditions, conditionsv1.ConditionAvailable)
@@ -900,7 +942,7 @@ var _ = Describe("HyperconvergedController", func() {
 				wr.SetIndent("", "  ")
 				_ = wr.Encode(conditions)
 
-				cd := conditionsv1.FindStatusCondition(conditions, hcov1alpha1.ConditionReconcileComplete)
+				cd := conditionsv1.FindStatusCondition(conditions, hcov1beta1.ConditionReconcileComplete)
 				Expect(cd.Status).Should(BeEquivalentTo("True"))
 				Expect(cd.Reason).Should(Equal(reconcileCompleted))
 				cd = conditionsv1.FindStatusCondition(conditions, conditionsv1.ConditionAvailable)
@@ -940,7 +982,7 @@ var _ = Describe("HyperconvergedController", func() {
 				wr.SetIndent("", "  ")
 				_ = wr.Encode(conditions)
 
-				cd := conditionsv1.FindStatusCondition(conditions, hcov1alpha1.ConditionReconcileComplete)
+				cd := conditionsv1.FindStatusCondition(conditions, hcov1beta1.ConditionReconcileComplete)
 				Expect(cd.Status).Should(BeEquivalentTo("True"))
 				Expect(cd.Reason).Should(Equal(reconcileCompleted))
 				cd = conditionsv1.FindStatusCondition(conditions, conditionsv1.ConditionAvailable)
@@ -974,7 +1016,7 @@ var _ = Describe("HyperconvergedController", func() {
 				wr.SetIndent("", "  ")
 				_ = wr.Encode(conditions)
 
-				cd := conditionsv1.FindStatusCondition(conditions, hcov1alpha1.ConditionReconcileComplete)
+				cd := conditionsv1.FindStatusCondition(conditions, hcov1beta1.ConditionReconcileComplete)
 				Expect(cd.Status).Should(BeEquivalentTo("True"))
 				Expect(cd.Reason).Should(Equal(reconcileCompleted))
 				cd = conditionsv1.FindStatusCondition(conditions, conditionsv1.ConditionAvailable)
@@ -1014,7 +1056,7 @@ var _ = Describe("HyperconvergedController", func() {
 				wr.SetIndent("", "  ")
 				_ = wr.Encode(conditions)
 
-				cd := conditionsv1.FindStatusCondition(conditions, hcov1alpha1.ConditionReconcileComplete)
+				cd := conditionsv1.FindStatusCondition(conditions, hcov1beta1.ConditionReconcileComplete)
 				Expect(cd.Status).Should(BeEquivalentTo("True"))
 				Expect(cd.Reason).Should(Equal(reconcileCompleted))
 				cd = conditionsv1.FindStatusCondition(conditions, conditionsv1.ConditionAvailable)
@@ -1048,7 +1090,7 @@ var _ = Describe("HyperconvergedController", func() {
 				wr.SetIndent("", "  ")
 				_ = wr.Encode(conditions)
 
-				cd := conditionsv1.FindStatusCondition(conditions, hcov1alpha1.ConditionReconcileComplete)
+				cd := conditionsv1.FindStatusCondition(conditions, hcov1beta1.ConditionReconcileComplete)
 				Expect(cd.Status).Should(BeEquivalentTo("True"))
 				Expect(cd.Reason).Should(Equal(reconcileCompleted))
 				cd = conditionsv1.FindStatusCondition(conditions, conditionsv1.ConditionAvailable)
@@ -1076,7 +1118,7 @@ var _ = Describe("HyperconvergedController", func() {
 				wr.SetIndent("", "  ")
 				_ = wr.Encode(conditions)
 
-				cd := conditionsv1.FindStatusCondition(conditions, hcov1alpha1.ConditionReconcileComplete)
+				cd := conditionsv1.FindStatusCondition(conditions, hcov1beta1.ConditionReconcileComplete)
 				Expect(cd.Status).Should(BeEquivalentTo("True"))
 				Expect(cd.Reason).Should(Equal(reconcileCompleted))
 				cd = conditionsv1.FindStatusCondition(conditions, conditionsv1.ConditionAvailable)
@@ -1116,7 +1158,7 @@ var _ = Describe("HyperconvergedController", func() {
 				wr.SetIndent("", "  ")
 				_ = wr.Encode(conditions)
 
-				cd := conditionsv1.FindStatusCondition(conditions, hcov1alpha1.ConditionReconcileComplete)
+				cd := conditionsv1.FindStatusCondition(conditions, hcov1beta1.ConditionReconcileComplete)
 				Expect(cd.Status).Should(BeEquivalentTo("True"))
 				Expect(cd.Reason).Should(Equal(reconcileCompleted))
 				cd = conditionsv1.FindStatusCondition(conditions, conditionsv1.ConditionAvailable)
@@ -1139,13 +1181,14 @@ var _ = Describe("HyperconvergedController", func() {
 				expected := getBasicDeployment()
 				expected.hco.Status.Conditions = nil
 				cl := expected.initClient()
-				rsc := schema.GroupResource{Group: "hco.kubevirt.io", Resource: "hyperconvergeds.hco.kubevirt.io"}
+				rsc := schema.GroupResource{Group: hcoutil.APIVersionGroup, Resource: "hyperconvergeds.hco.kubevirt.io"}
 				cl.initiateWriteErrors(
+					nil,
 					apierrors.NewConflict(rsc, "hco", errors.New("test error")),
 				)
 				r := initReconciler(cl)
 
-				r.ownVersion = os.Getenv(util.HcoKvIoVersionName)
+				r.ownVersion = os.Getenv(hcoutil.HcoKvIoVersionName)
 				if r.ownVersion == "" {
 					r.ownVersion = version.Version
 				}
@@ -1161,11 +1204,11 @@ var _ = Describe("HyperconvergedController", func() {
 				expected := getBasicDeployment()
 				expected.hco.Status.Conditions = nil
 				cl := expected.initClient()
-				rs := schema.GroupResource{"hco.kubevirt.io", "hyperconvergeds.hco.kubevirt.io"}
+				rs := schema.GroupResource{hcoutil.APIVersionGroup, "hyperconvergeds.hco.kubevirt.io"}
 				cl.Status().(*hcoTestStatusWriter).initiateErrors(apierrors.NewConflict(rs, "hco", errors.New("test error")))
 				r := initReconciler(cl)
 
-				r.ownVersion = os.Getenv(util.HcoKvIoVersionName)
+				r.ownVersion = os.Getenv(hcoutil.HcoKvIoVersionName)
 				if r.ownVersion == "" {
 					r.ownVersion = version.Version
 				}

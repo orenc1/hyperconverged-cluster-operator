@@ -31,6 +31,7 @@ import (
 
 	csvv1alpha1 "github.com/operator-framework/operator-lifecycle-manager/pkg/api/apis/operators/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,6 +39,7 @@ import (
 
 // flags for the command line arguments we accept
 var (
+	cwd, _             = os.Getwd()
 	deployDir          = flag.String("deploy-dir", "deploy", "Directory where manifests should be written")
 	cnaCsv             = flag.String("cna-csv", "", "Cluster Network Addons CSV string")
 	virtCsv            = flag.String("virt-csv", "", "KubeVirt CSV string")
@@ -60,6 +62,7 @@ var (
 	nmoVersion         = flag.String("nmo-version", "", "NM operator version")
 	hppoVersion        = flag.String("hppo-version", "", "HPP operator version")
 	vmImportVersion    = flag.String("vm-import-version", "", "VM-Import operator version")
+	apiSources         = flag.String("api-sources", cwd+"/...", "Project sources")
 )
 
 // check handles errors
@@ -136,6 +139,7 @@ func main() {
 			*nmoVersion,
 			*hppoVersion,
 			*vmImportVersion,
+			[]corev1.EnvVar{},
 		),
 	}
 	serviceAccounts := map[string]v1.ServiceAccount{
@@ -300,7 +304,7 @@ func main() {
 
 	// Write out CRDs and CR
 	util.MarshallObject(components.GetOperatorCR(), operatorCr)
-	util.MarshallObject(components.GetOperatorCRD(*operatorNamespace), operatorCrd)
+	util.MarshallObject(components.GetOperatorCRD(*apiSources), operatorCrd)
 	util.MarshallObject(components.GetV2VCRD(), v2vCrd)
 	util.MarshallObject(components.GetV2VOvirtProviderCRD(), v2voVirtCrd)
 

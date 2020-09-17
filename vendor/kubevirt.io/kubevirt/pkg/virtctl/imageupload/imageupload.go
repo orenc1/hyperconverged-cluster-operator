@@ -22,10 +22,12 @@ package imageupload
 import (
 	"crypto/tls"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -83,6 +85,7 @@ var (
 	uploadPodWaitSecs uint
 	blockVolume       bool
 	noCreate          bool
+	createPVC         bool
 )
 
 // HTTPClientCreator is a function that creates http clients
@@ -110,7 +113,7 @@ func init() {
 	SetDefaultHTTPClientCreator()
 }
 
-// NewImageUploadCommand returns a cobra.Command for handling the the uploading of VM images
+// NewImageUploadCommand returns a cobra.Command for handling the uploading of VM images
 func NewImageUploadCommand(clientConfig clientcmd.ClientConfig) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "image-upload",
@@ -140,16 +143,19 @@ func NewImageUploadCommand(clientConfig clientcmd.ClientConfig) *cobra.Command {
 
 func usage() string {
 	usage := `  # Upload a local disk image to a newly created DataVolume:
-  {{ProgramName}} image-upload dv dv-name --size=10Gi --image-path=/images/fedora30.qcow2
+  {{ProgramName}} image-upload dv fedora-dv --size=10Gi --image-path=/images/fedora30.qcow2
 
   # Upload a local disk image to an existing DataVolume
-  {{ProgramName}} image-upload dv dv-name --no-create --image-path=/images/fedora30.qcow2
+  {{ProgramName}} image-upload dv fedora-dv --no-create --image-path=/images/fedora30.qcow2
+
+  # Upload a local disk image to a newly created PersistentVolumeClaim
+  {{ProgramName}} image-upload pvc fedora-pvc --size=10Gi --image-path=/images/fedora30.qcow2
 
   # Upload a local disk image to an existing PersistentVolumeClaim
-  {{ProgramName}} image-upload pvc pvc-name --image-path=/images/fedora30.qcow2
+  {{ProgramName}} image-upload pvc fedora-pvc --no-create --image-path=/images/fedora30.qcow2
 
   # Upload to a DataVolume with explicit URL to CDI Upload Proxy
-  {{ProgramName}} image-upload dv dv-name --uploadproxy-url=https://cdi-uploadproxy.mycluster.com --image-path=/images/fedora30.qcow2`
+  {{ProgramName}} image-upload dv fedora-dv --uploadproxy-url=https://cdi-uploadproxy.mycluster.com --image-path=/images/fedora30.qcow2`
 	return usage
 }
 
@@ -172,6 +178,8 @@ func parseArgs(args []string) error {
 			return fmt.Errorf("cannot use --pvc-name and args")
 		}
 
+		createPVC = true
+
 		return nil
 	}
 
@@ -181,8 +189,9 @@ func parseArgs(args []string) error {
 
 	switch strings.ToLower(args[0]) {
 	case "dv":
+		createPVC = false
 	case "pvc":
-		noCreate = true
+		createPVC = true
 	default:
 		return fmt.Errorf("invalid resource type %s", args[0])
 	}
@@ -220,15 +229,24 @@ func (c *command) run(cmd *cobra.Command, args []string) error {
 		}
 
 		if !noCreate && len(size) == 0 {
-			return fmt.Errorf("when creating DataVolume, the size must be specified")
+			return fmt.Errorf("when creating a resource, the size must be specified")
 		}
 
-		dv, err := createUploadDataVolume(virtClient, namespace, name, size, storageClass, accessMode, blockVolume)
-		if err != nil {
-			return err
+		var obj metav1.Object
+
+		if createPVC {
+			obj, err = createUploadPVC(virtClient, namespace, name, size, storageClass, accessMode, blockVolume)
+			if err != nil {
+				return err
+			}
+		} else {
+			obj, err = createUploadDataVolume(virtClient, namespace, name, size, storageClass, accessMode, blockVolume)
+			if err != nil {
+				return err
+			}
 		}
 
-		fmt.Printf("DataVolume %s/%s created\n", dv.Namespace, dv.Name)
+		fmt.Printf("%s %s/%s created\n", reflect.TypeOf(obj).Elem().Name(), obj.GetNamespace(), obj.GetName())
 	} else {
 		pvc, err = ensurePVCSupportsUpload(virtClient, pvc)
 		if err != nil {
@@ -368,9 +386,13 @@ func uploadData(uploadProxyURL, token string, file *os.File, insecure bool) erro
 	if err != nil {
 		return err
 	}
-
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected return value %d", resp.StatusCode)
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("unexpected return value %d, %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -448,9 +470,9 @@ func waitUploadProcessingComplete(client kubernetes.Interface, namespace, name s
 }
 
 func createUploadDataVolume(client kubecli.KubevirtClient, namespace, name, size, storageClass, accessMode string, blockVolume bool) (*cdiv1.DataVolume, error) {
-	quantity, err := resource.ParseQuantity(size)
+	pvcSpec, err := createPVCSpec(size, storageClass, accessMode, blockVolume)
 	if err != nil {
-		return nil, fmt.Errorf("validation failed for size=%s: %s", size, err)
+		return nil, err
 	}
 
 	dv := &cdiv1.DataVolume{
@@ -462,27 +484,8 @@ func createUploadDataVolume(client kubecli.KubevirtClient, namespace, name, size
 			Source: cdiv1.DataVolumeSource{
 				Upload: &cdiv1.DataVolumeSourceUpload{},
 			},
-			PVC: &v1.PersistentVolumeClaimSpec{
-				Resources: v1.ResourceRequirements{
-					Requests: v1.ResourceList{
-						v1.ResourceStorage: quantity,
-					},
-				},
-			},
+			PVC: pvcSpec,
 		},
-	}
-
-	if storageClass != "" {
-		dv.Spec.PVC.StorageClassName = &storageClass
-	}
-
-	if accessMode != "" {
-		dv.Spec.PVC.AccessModes = []v1.PersistentVolumeAccessMode{v1.PersistentVolumeAccessMode(accessMode)}
-	}
-
-	if blockVolume {
-		volMode := v1.PersistentVolumeBlock
-		dv.Spec.PVC.VolumeMode = &volMode
 	}
 
 	dv, err = client.CdiClient().CdiV1alpha1().DataVolumes(namespace).Create(dv)
@@ -493,11 +496,65 @@ func createUploadDataVolume(client kubecli.KubevirtClient, namespace, name, size
 	return dv, nil
 }
 
+func createUploadPVC(client kubernetes.Interface, namespace, name, size, storageClass, accessMode string, blockVolume bool) (*v1.PersistentVolumeClaim, error) {
+	pvcSpec, err := createPVCSpec(size, storageClass, accessMode, blockVolume)
+	if err != nil {
+		return nil, err
+	}
+
+	pvc := &v1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Annotations: map[string]string{
+				uploadRequestAnnotation: "",
+			},
+		},
+		Spec: *pvcSpec,
+	}
+
+	pvc, err = client.CoreV1().PersistentVolumeClaims(namespace).Create(pvc)
+	if err != nil {
+		return nil, err
+	}
+
+	return pvc, nil
+}
+
+func createPVCSpec(size, storageClass, accessMode string, blockVolume bool) (*v1.PersistentVolumeClaimSpec, error) {
+	quantity, err := resource.ParseQuantity(size)
+	if err != nil {
+		return nil, fmt.Errorf("validation failed for size=%s: %s", size, err)
+	}
+
+	spec := &v1.PersistentVolumeClaimSpec{
+		Resources: v1.ResourceRequirements{
+			Requests: v1.ResourceList{
+				v1.ResourceStorage: quantity,
+			},
+		},
+	}
+
+	if accessMode != "" {
+		spec.AccessModes = []v1.PersistentVolumeAccessMode{v1.PersistentVolumeAccessMode(accessMode)}
+	}
+
+	if blockVolume {
+		volMode := v1.PersistentVolumeBlock
+		spec.VolumeMode = &volMode
+	}
+
+	return spec, nil
+}
+
 func ensurePVCSupportsUpload(client kubernetes.Interface, pvc *v1.PersistentVolumeClaim) (*v1.PersistentVolumeClaim, error) {
 	var err error
 	_, hasAnnotation := pvc.Annotations[uploadRequestAnnotation]
 
 	if !hasAnnotation {
+		if pvc.GetAnnotations() == nil {
+			pvc.SetAnnotations(make(map[string]string, 0))
+		}
 		pvc.Annotations[uploadRequestAnnotation] = ""
 		pvc, err = client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Update(pvc)
 		if err != nil {

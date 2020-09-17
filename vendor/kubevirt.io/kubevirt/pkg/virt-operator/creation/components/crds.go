@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	virtv1 "kubevirt.io/client-go/api/v1"
+	snapshotv1 "kubevirt.io/client-go/apis/snapshot/v1alpha1"
 )
 
 const (
@@ -75,6 +76,7 @@ func NewVirtualMachineInstanceCrd() *extv1beta1.CustomResourceDefinition {
 			{Name: "IP", Type: "string", JSONPath: ".status.interfaces[0].ipAddress"},
 			{Name: "NodeName", Type: "string", JSONPath: ".status.nodeName"},
 			{Name: "Live-Migratable", Type: "string", JSONPath: ".status.conditions[?(@.type=='LiveMigratable')].status", Priority: 1},
+			{Name: "Paused", Type: "string", JSONPath: ".status.conditions[?(@.type=='Paused')].status", Priority: 1},
 		},
 	}
 
@@ -104,6 +106,9 @@ func NewVirtualMachineCrd() *extv1beta1.CustomResourceDefinition {
 			{Name: "Age", Type: "date", JSONPath: ".metadata.creationTimestamp"},
 			{Name: "Volume", Description: "Primary Volume", Type: "string", JSONPath: ".spec.volumes[0].name"},
 			{Name: "Created", Type: "boolean", JSONPath: ".status.created", Priority: 1},
+		},
+		Subresources: &extv1beta1.CustomResourceSubresources{
+			Status: &extv1beta1.CustomResourceSubresourceStatus{},
 		},
 	}
 
@@ -169,6 +174,7 @@ func NewReplicaSetCrd() *extv1beta1.CustomResourceDefinition {
 				StatusReplicasPath: ".status.replicas",
 				LabelSelectorPath:  &labelSelector,
 			},
+			Status: &extv1beta1.CustomResourceSubresourceStatus{},
 		},
 	}
 
@@ -193,6 +199,9 @@ func NewVirtualMachineInstanceMigrationCrd() *extv1beta1.CustomResourceDefinitio
 			Categories: []string{
 				"all",
 			},
+		},
+		Subresources: &extv1beta1.CustomResourceSubresources{
+			Status: &extv1beta1.CustomResourceSubresourceStatus{},
 		},
 	}
 
@@ -236,6 +245,79 @@ func NewKubeVirtCrd() *extv1beta1.CustomResourceDefinition {
 		AdditionalPrinterColumns: []extv1beta1.CustomResourceColumnDefinition{
 			{Name: "Age", Type: "date", JSONPath: ".metadata.creationTimestamp"},
 			{Name: "Phase", Type: "string", JSONPath: ".status.phase"},
+		},
+		Subresources: &extv1beta1.CustomResourceSubresources{
+			Status: &extv1beta1.CustomResourceSubresourceStatus{},
+		},
+	}
+
+	return crd
+}
+
+func NewVirtualMachineSnapshotCrd() *extv1beta1.CustomResourceDefinition {
+	crd := newBlankCrd()
+
+	crd.ObjectMeta.Name = "virtualmachinesnapshots." + snapshotv1.SchemeGroupVersion.Group
+	crd.Spec = extv1beta1.CustomResourceDefinitionSpec{
+		Group:   snapshotv1.SchemeGroupVersion.Group,
+		Version: snapshotv1.SchemeGroupVersion.Version,
+		Versions: []extv1beta1.CustomResourceDefinitionVersion{
+			{
+				Name:    snapshotv1.SchemeGroupVersion.Version,
+				Served:  true,
+				Storage: true,
+			},
+		},
+		Scope: "Namespaced",
+		Names: extv1beta1.CustomResourceDefinitionNames{
+			Plural:     "virtualmachinesnapshots",
+			Singular:   "virtualmachinesnapshot",
+			Kind:       "VirtualMachineSnapshot",
+			ShortNames: []string{"vmsnapshot", "vmsnapshots"},
+			Categories: []string{
+				"all",
+			},
+		},
+		AdditionalPrinterColumns: []extv1beta1.CustomResourceColumnDefinition{
+			{Name: "SourceKind", Type: "string", JSONPath: ".spec.source.kind"},
+			{Name: "SourceName", Type: "string", JSONPath: ".spec.source.name"},
+			{Name: "ReadyToUse", Type: "boolean", JSONPath: ".status.readyToUse"},
+			{Name: "CreationTime", Type: "date", JSONPath: ".status.creationTime"},
+			{Name: "Error", Type: "string", JSONPath: ".status.error.message"},
+		},
+	}
+
+	return crd
+}
+
+func NewVirtualMachineSnapshotContentCrd() *extv1beta1.CustomResourceDefinition {
+	crd := newBlankCrd()
+
+	crd.ObjectMeta.Name = "virtualmachinesnapshotcontents." + snapshotv1.SchemeGroupVersion.Group
+	crd.Spec = extv1beta1.CustomResourceDefinitionSpec{
+		Group:   snapshotv1.SchemeGroupVersion.Group,
+		Version: snapshotv1.SchemeGroupVersion.Version,
+		Versions: []extv1beta1.CustomResourceDefinitionVersion{
+			{
+				Name:    snapshotv1.SchemeGroupVersion.Version,
+				Served:  true,
+				Storage: true,
+			},
+		},
+		Scope: "Namespaced",
+		Names: extv1beta1.CustomResourceDefinitionNames{
+			Plural:     "virtualmachinesnapshotcontents",
+			Singular:   "virtualmachinesnapshotcontent",
+			Kind:       "VirtualMachineSnapshotContent",
+			ShortNames: []string{"vmsnapshotcontent", "vmsnapshotcontents"},
+			Categories: []string{
+				"all",
+			},
+		},
+		AdditionalPrinterColumns: []extv1beta1.CustomResourceColumnDefinition{
+			{Name: "ReadyToUse", Type: "boolean", JSONPath: ".status.readyToUse"},
+			{Name: "CreationTime", Type: "date", JSONPath: ".status.creationTime"},
+			{Name: "Error", Type: "string", JSONPath: ".status.error.message"},
 		},
 	}
 

@@ -11,9 +11,6 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 // Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 
-// HyperConvergedName is the name of the HyperConverged resource that will be reconciled
-const HyperConvergedName = "kubevirt-hyperconverged"
-
 // HyperConvergedSpec defines the desired state of HyperConverged
 // +k8s:openapi-gen=true
 type HyperConvergedSpec struct {
@@ -102,6 +99,9 @@ const ConditionReconcileComplete conditionsv1.ConditionType = "ReconcileComplete
 
 // HyperConverged is the Schema for the hyperconvergeds API
 // +k8s:openapi-gen=true
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:resource:scope=Namespaced,categories={all},shortName={hco,hcos}
+// +kubebuilder:subresource:status
 type HyperConverged struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

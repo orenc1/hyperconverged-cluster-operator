@@ -17,24 +17,27 @@ import (
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/runtime/signals"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
-	sspopv1 "github.com/MarSik/kubevirt-ssp-operator/pkg/apis"
 	networkaddons "github.com/kubevirt/cluster-network-addons-operator/pkg/apis"
-	hcov1alpha1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1alpha1"
+	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1beta1"
 	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
-	vmimportv1 "github.com/kubevirt/vm-import-operator/pkg/apis/v2v/v1alpha1"
+	sspopv1 "github.com/kubevirt/kubevirt-ssp-operator/pkg/apis"
+	vmimportv1beta1 "github.com/kubevirt/vm-import-operator/pkg/apis/v2v/v1beta1"
+	consolev1 "github.com/openshift/api/console/v1"
 	csvv1alpha1 "github.com/operator-framework/operator-lifecycle-manager/pkg/api/apis/operators/v1alpha1"
 	kubemetrics "github.com/operator-framework/operator-sdk/pkg/kube-metrics"
 	sdkVersion "github.com/operator-framework/operator-sdk/version"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	cdiv1alpha1 "kubevirt.io/containerized-data-importer/pkg/apis/core/v1alpha1"
-	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // Change below variables to serve metrics on different host or port.
@@ -42,8 +45,8 @@ var (
 	metricsHost               = "0.0.0.0"
 	metricsPort         int32 = 8383
 	operatorMetricsPort int32 = 8686
+	log                       = logf.Log.WithName("cmd")
 )
-var log = logf.Log.WithName("cmd")
 
 func printVersion() {
 	log.Info(fmt.Sprintf("Go Version: %s", runtime.Version()))
@@ -74,17 +77,30 @@ func main() {
 
 	printVersion()
 
-	watchNamespace, err := k8sutil.GetWatchNamespace()
-	if err != nil {
-		log.Error(err, "Failed to get watch namespace")
-		os.Exit(1)
-	}
-
 	// Get the namespace the operator is currently deployed in.
 	depOperatorNs, err := k8sutil.GetOperatorNamespace()
+	runInLocal := false
 	if err != nil {
-		log.Error(err, "Failed to get operator namespace")
-		os.Exit(1)
+		if err == k8sutil.ErrRunLocal {
+			runInLocal = true
+		} else {
+			log.Error(err, "Failed to get operator namespace")
+			os.Exit(1)
+		}
+	}
+
+	if runInLocal {
+		log.Info("running locally")
+	}
+
+	watchNamespace := ""
+
+	if !runInLocal {
+		watchNamespace, err = k8sutil.GetWatchNamespace()
+		if err != nil {
+			log.Error(err, "Failed to get watch namespace")
+			os.Exit(1)
+		}
 	}
 
 	// Get the namespace the operator should be deployed in.
@@ -94,9 +110,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if runInLocal {
+		depOperatorNs = operatorNsEnv
+	}
+
 	if depOperatorNs != operatorNsEnv {
 		log.Error(
-			fmt.Errorf("Operator running in different namespace than expected"),
+			fmt.Errorf("operator running in different namespace than expected"),
 			fmt.Sprintf("Please re-deploy this operator into %v namespace", operatorNsEnv),
 			"Expected.Namespace", operatorNsEnv,
 			"Deployed.Namespace", depOperatorNs,
@@ -139,6 +159,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	ci := hcoutil.GetClusterInfo()
+	err = ci.CheckRunningInOpenshift(log, runInLocal)
+	if err != nil {
+		log.Error(err, "Cannot detect cluster type")
+	}
+
+	eventEmitter := hcoutil.GetEventEmitter()
+	// Set temporary configuration, until the regular client is ready
+	eventEmitter.Init(ctx, mgr, ci, log)
+	if err != nil {
+		log.Error(err, "failed to initiate event emitter")
+		os.Exit(1)
+	}
+
 	log.Info("Registering Components.")
 
 	// Setup Scheme for all resources
@@ -148,8 +182,9 @@ func main() {
 		networkaddons.AddToScheme,
 		sspopv1.AddToScheme,
 		csvv1alpha1.AddToScheme,
-		vmimportv1.AddToScheme,
+		vmimportv1beta1.AddToScheme,
 		admissionregistrationv1.AddToScheme,
+		consolev1.AddToScheme,
 	} {
 		if err := f(mgr.GetScheme()); err != nil {
 			log.Error(err, "Failed to add to scheme")
@@ -158,51 +193,86 @@ func main() {
 	}
 
 	// Setup all Controllers
-	if err := controller.AddToManager(mgr); err != nil {
+	if err := controller.AddToManager(mgr, ci); err != nil {
 		log.Error(err, "")
+		eventEmitter.EmitEvent(nil, corev1.EventTypeWarning, "InitError", "Unable to register component; "+err.Error())
 		os.Exit(1)
 	}
 
-	if err = serveCRMetrics(cfg); err != nil {
-		log.Info("Could not generate and serve custom resource metrics", "error", err.Error())
-	}
+	if !runInLocal {
+		if err = serveCRMetrics(cfg); err != nil {
+			log.Error(err, "Could not generate and serve custom resource metrics")
+		}
 
-	// Add to the below struct any other metrics ports you want to expose.
-	servicePorts := []corev1.ServicePort{
-		{Port: metricsPort, Name: metrics.OperatorPortName, Protocol: corev1.ProtocolTCP, TargetPort: intstr.IntOrString{Type: intstr.Int, IntVal: metricsPort}},
-		{Port: operatorMetricsPort, Name: metrics.CRPortName, Protocol: corev1.ProtocolTCP, TargetPort: intstr.IntOrString{Type: intstr.Int, IntVal: operatorMetricsPort}},
-	}
-	// Create Service object to expose the metrics port(s).
-	service, err := metrics.CreateMetricsService(ctx, cfg, servicePorts)
-	if err != nil {
-		log.Info("Could not create metrics Service", "error", err.Error())
+		// Add to the below struct any other metrics ports you want to expose.
+		servicePorts := []corev1.ServicePort{
+			{Port: metricsPort, Name: metrics.OperatorPortName, Protocol: corev1.ProtocolTCP, TargetPort: intstr.IntOrString{Type: intstr.Int, IntVal: metricsPort}},
+			{Port: operatorMetricsPort, Name: metrics.CRPortName, Protocol: corev1.ProtocolTCP, TargetPort: intstr.IntOrString{Type: intstr.Int, IntVal: operatorMetricsPort}},
+		}
+
+		// Create Service object to expose the metrics port(s).
+		service, err := metrics.CreateMetricsService(ctx, cfg, servicePorts)
+		if err != nil {
+			log.Error(err, "Could not create metrics Service")
+		}
+		services := []*corev1.Service{service}
+		_, err = metrics.CreateServiceMonitors(cfg, depOperatorNs, services)
+		if err != nil {
+			log.Error(err, "Could not create ServiceMonitor object")
+			// If this operator is deployed to a cluster without the prometheus-operator running, it will return
+			// ErrServiceMonitorNotPresent, which can be used to safely skip ServiceMonitor creation.
+			if err == metrics.ErrServiceMonitorNotPresent {
+				log.Info("Install prometheus-operator in your cluster to create ServiceMonitor objects")
+			}
+		}
 	}
 
 	// CreateServiceMonitors will automatically create the prometheus-operator ServiceMonitor resources
 	// necessary to configure Prometheus to scrape metrics from this operator.
-	services := []*corev1.Service{service}
-	_, err = metrics.CreateServiceMonitors(cfg, depOperatorNs, services)
-	if err != nil {
-		log.Info("Could not create ServiceMonitor object", "error", err.Error())
-		// If this operator is deployed to a cluster without the prometheus-operator running, it will return
-		// ErrServiceMonitorNotPresent, which can be used to safely skip ServiceMonitor creation.
-		if err == metrics.ErrServiceMonitorNotPresent {
-			log.Info("Install prometheus-operator in your cluster to create ServiceMonitor objects", "error", err.Error())
-		}
+	if err = (&hcov1beta1.HyperConverged{}).SetupWebhookWithManager(ctx, mgr); err != nil {
+		log.Error(err, "unable to create webhook", "webhook", "HyperConverged")
+		eventEmitter.EmitEvent(nil, corev1.EventTypeWarning, "InitError", "Unable to create webhook")
+		os.Exit(1)
 	}
 
-	if err = (&hcov1alpha1.HyperConverged{}).SetupWebhookWithManager(ctx, mgr); err != nil {
-		log.Error(err, "unable to create webhook", "webhook", "HyperConverged")
+	err = createPriorityClass(ctx, mgr)
+	if err != nil {
+		log.Error(err, "Failed creating PriorityClass")
 		os.Exit(1)
 	}
 
 	log.Info("Starting the Cmd.")
-
+	eventEmitter.EmitEvent(nil, corev1.EventTypeNormal, "Init", "Starting the HyperConverged Pod")
 	// Start the Cmd
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		log.Error(err, "Manager exited non-zero")
+		eventEmitter.EmitEvent(nil, corev1.EventTypeWarning, "UnexpectedError", "HyperConverged crashed; "+err.Error())
 		os.Exit(1)
 	}
+}
+
+// KubeVirtPriorityClass is needed by virt-operator but OLM is not able to
+// create it so we have to create it ASAP.
+// When the user deletes HCO CR virt-operator should continue running
+// so we are never supposed to delete it: because the priority class
+// is completely opaque to OLM it will remain as a leftover on the cluster
+func createPriorityClass(ctx context.Context, mgr manager.Manager) error {
+	pc := (&hcov1beta1.HyperConverged{}).NewKubeVirtPriorityClass()
+
+	key, err := client.ObjectKeyFromObject(pc)
+	if err != nil {
+		log.Error(err, "Failed to get object key for KubeVirt PriorityClass")
+		return err
+	}
+
+	err = mgr.GetAPIReader().Get(ctx, key, pc)
+
+	if err != nil && apierrors.IsNotFound(err) {
+		log.Info("Creating KubeVirt PriorityClass")
+		return mgr.GetClient().Create(ctx, pc, &client.CreateOptions{})
+	}
+
+	return err
 }
 
 // serveCRMetrics gets the Operator/CustomResource GVKs and generates metrics based on those types.

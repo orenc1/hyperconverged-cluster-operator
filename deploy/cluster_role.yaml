@@ -323,6 +323,17 @@ rules:
   - watch
   - update
   - patch
+- apiGroups:
+  - console.openshift.io
+  resources:
+  - consoleclidownloads
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+  - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -570,6 +581,12 @@ rules:
 - apiGroups:
   - kubevirt.io
   resources:
+  - virtualmachines/status
+  verbs:
+  - patch
+- apiGroups:
+  - kubevirt.io
+  resources:
   - virtualmachineinstancemigrations
   verbs:
   - create
@@ -603,6 +620,14 @@ rules:
   - apiextensions.k8s.io
   resources:
   - customresourcedefinitions
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - kubevirts
   verbs:
   - get
   - list
@@ -672,6 +697,12 @@ rules:
   - list
   - watch
 - apiGroups:
+  - snapshot.kubevirt.io
+  resources:
+  - '*'
+  verbs:
+  - '*'
+- apiGroups:
   - kubevirt.io
   resources:
   - '*'
@@ -706,6 +737,33 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshotclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - kubevirt.io
   resources:
   - virtualmachineinstances
@@ -736,6 +794,14 @@ rules:
   - apiextensions.k8s.io
   resources:
   - customresourcedefinitions
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - kubevirts
   verbs:
   - get
   - list
@@ -867,6 +933,7 @@ rules:
   - patch
   - update
   - watch
+  - delete
 - apiGroups:
   - monitoring.coreos.com
   resources:
@@ -877,6 +944,7 @@ rules:
   - list
   - patch
   - watch
+  - delete
 - apiGroups:
   - monitoring.coreos.com
   resources:
@@ -918,6 +986,7 @@ rules:
   - list
   - patch
   - watch
+  - delete
 - apiGroups:
   - ""
   resources:
@@ -932,6 +1001,7 @@ rules:
   - patch
   - list
   - watch
+  - delete
 - apiGroups:
   - ""
   resources:
@@ -966,6 +1036,16 @@ rules:
   - list
   - patch
   - watch
+- apiGroups:
+  - security.openshift.io
+  resources:
+  - securitycontextconstraints
+  verbs:
+  - get
+  - list
+  - create
+  - watch
+  - patch
 - apiGroups:
   - security.openshift.io
   resourceNames:
@@ -1186,6 +1266,25 @@ rules:
   verbs:
   - '*'
 - apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - update
+  - patch
+  - watch
+  - create
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - ""
   resources:
   - nodes
@@ -1375,6 +1474,8 @@ rules:
   - configmaps
   - secrets
   - serviceaccounts
+  - services
+  - services/finalizers
   verbs:
   - '*'
 - apiGroups:
@@ -1403,5 +1504,11 @@ rules:
   resources:
   - clusterrolebindings
   - clusterroles
+  verbs:
+  - '*'
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
   verbs:
   - '*'

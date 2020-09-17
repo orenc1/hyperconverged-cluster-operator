@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
@@ -40,6 +41,7 @@ import (
 	"github.com/kubevirt/hyperconverged-cluster-operator/tools/util"
 
 	csvv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -49,13 +51,6 @@ const CSVMode = "CSV"
 const CRDMode = "CRDs"
 
 var validOutputModes = []string{CSVMode, CRDMode}
-
-// TODO: get rid of this once RelatedImages officially
-// appears in github.com/operator-framework/operator-lifecycle-manager/pkg/api/apis/operators
-type relatedImage struct {
-	Name string `json:"name"`
-	Ref  string `json:"image"`
-}
 
 type ClusterServiceVersionSpecExtended struct {
 	csvv1alpha1.ClusterServiceVersionSpec
@@ -70,7 +65,27 @@ type ClusterServiceVersionExtended struct {
 	Status csvv1alpha1.ClusterServiceVersionStatus `json:"status"`
 }
 
+type EnvVarFlags []corev1.EnvVar
+
+func (i *EnvVarFlags) String() string {
+	es := []string{}
+	for _, ev := range *i {
+		es = append(es, fmt.Sprintf("%s=%s", ev.Name, ev.Value))
+	}
+	return strings.Join(es, ",")
+}
+
+func (i *EnvVarFlags) Set(value string) error {
+	kv := strings.Split(value, "=")
+	*i = append(*i, corev1.EnvVar{
+		Name:  kv[0],
+		Value: kv[1],
+	})
+	return nil
+}
+
 var (
+	cwd, _              = os.Getwd()
 	outputMode          = flag.String("output-mode", CSVMode, "Working mode: "+strings.Join(validOutputModes, "|"))
 	cnaCsv              = flag.String("cna-csv", "", "Cluster Network Addons CSV string")
 	virtCsv             = flag.String("virt-csv", "", "KubeVirt CSV string")
@@ -105,11 +120,13 @@ var (
 	nmoVersion      = flag.String("nmo-version", "", "NM operator version")
 	hppoVersion     = flag.String("hppo-version", "", "HPP operator version")
 	vmImportVersion = flag.String("vm-import-version", "", "VM-Import operator version")
+	apiSources      = flag.String("api-sources", cwd+"/...", "Project sources")
+	envVars         EnvVarFlags
 )
 
 func gen_hco_crds() {
 	// Write out CRDs and CR
-	util.MarshallObject(components.GetOperatorCRD(*namespace), os.Stdout)
+	util.MarshallObject(components.GetOperatorCRD(*apiSources), os.Stdout)
 	util.MarshallObject(components.GetV2VCRD(), os.Stdout)
 	util.MarshallObject(components.GetV2VOvirtProviderCRD(), os.Stdout)
 }
@@ -211,6 +228,8 @@ func validateNoApiOverlap(crdDir string) bool {
 }
 
 func main() {
+	flag.Var(&envVars, "env-var", "HCO environment variable (key=value), may be used multiple times")
+
 	flag.Parse()
 
 	if *crdDir != "" {
@@ -280,25 +299,14 @@ func main() {
 			*nmoVersion,
 			*hppoVersion,
 			*vmImportVersion,
+			envVars,
 		)
+
+		relatedImageSet := newRelatedImageSet()
 
 		for _, image := range strings.Split(*relatedImagesList, ",") {
 			if image != "" {
-				name := ""
-				if strings.Contains(image, "|") {
-					image_s := strings.Split(image, "|")
-					image = image_s[0]
-					name = image_s[1]
-				} else {
-					names := strings.Split(strings.Split(image, "@")[0], "/")
-					name = names[len(names)-1]
-				}
-				csvExtended.Spec.RelatedImages = append(
-					csvExtended.Spec.RelatedImages,
-					relatedImage{
-						Name: name,
-						Ref:  image,
-					})
+				relatedImageSet.add(image)
 			}
 		}
 
@@ -306,7 +314,7 @@ func main() {
 			if csvStr != "" {
 				csvBytes := []byte(csvStr)
 
-				csvStruct := &csvv1alpha1.ClusterServiceVersion{}
+				csvStruct := &ClusterServiceVersionExtended{}
 
 				err := yaml.Unmarshal(csvBytes, csvStruct)
 				if err != nil {
@@ -318,6 +326,8 @@ func main() {
 				installStrategyBase.DeploymentSpecs = append(installStrategyBase.DeploymentSpecs, strategySpec.DeploymentSpecs...)
 				installStrategyBase.ClusterPermissions = append(installStrategyBase.ClusterPermissions, strategySpec.ClusterPermissions...)
 				installStrategyBase.Permissions = append(installStrategyBase.Permissions, strategySpec.Permissions...)
+
+				csvExtended.Spec.WebhookDefinitions = append(csvExtended.Spec.WebhookDefinitions, csvStruct.Spec.WebhookDefinitions...)
 
 				for _, owned := range csvStruct.Spec.CustomResourceDefinitions.Owned {
 					csvExtended.Spec.CustomResourceDefinitions.Owned = append(
@@ -354,8 +364,13 @@ func main() {
 				}
 				csvExtended.Annotations["alm-examples"] = string(alm_b)
 
+				for _, image := range csvStruct.Spec.RelatedImages {
+					relatedImageSet.add(image.Ref)
+				}
 			}
 		}
+
+		csvExtended.Spec.RelatedImages = relatedImageSet.dump()
 
 		hidden_crds := []string{}
 		visible_crds := strings.Split(*visibleCRDList, ",")
@@ -417,4 +432,61 @@ func main() {
 		panic("Unsupported output mode: " + *outputMode)
 	}
 
+}
+
+// TODO: get rid of this once RelatedImageSet officially
+// appears in github.com/operator-framework/operator-lifecycle-manager/pkg/api/apis/operators
+type relatedImage struct {
+	Name string `json:"name"`
+	Ref  string `json:"image"`
+}
+
+// RelatedImageSet is a set that makes sure that each image appears only once.
+type RelatedImageSet map[string]string
+
+// constructor
+func newRelatedImageSet() RelatedImageSet {
+	return make(map[string]string)
+}
+
+// add image to the set. Ignore if the image already exists in the set
+func (ri *RelatedImageSet) add(image string) {
+	name := ""
+	if strings.Contains(image, "|") {
+		image_s := strings.Split(image, "|")
+		image = image_s[0]
+		name = image_s[1]
+	} else {
+		names := strings.Split(strings.Split(image, "@")[0], "/")
+		name = names[len(names)-1]
+	}
+
+	(*ri)[name] = image
+}
+
+// return the related image set as a sorted slice
+func (ri RelatedImageSet) dump() []relatedImage {
+	images := []relatedImage{}
+
+	for name, image := range ri {
+		images = append(images, relatedImage{Name: name, Ref: image})
+	}
+
+	sort.Sort(relatedImageSortable(images))
+	return images
+}
+
+// implement sort.Interface for relatedImage slice. Sort by RelatedImage.Name
+type relatedImageSortable []relatedImage
+
+func (ris relatedImageSortable) Len() int {
+	return len(ris)
+}
+
+func (ris relatedImageSortable) Less(i, j int) bool {
+	return ris[i].Name < ris[j].Name
+}
+
+func (ris relatedImageSortable) Swap(i, j int) {
+	ris[i], ris[j] = ris[j], ris[i]
 }

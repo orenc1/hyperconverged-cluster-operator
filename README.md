@@ -7,7 +7,7 @@
 A unified operator deploying and controlling [KubeVirt](https://github.com/kubevirt/kubevirt) and several adjacent operators:
 
 - [Containerized Data Importer](https://github.com/kubevirt/containerized-data-importer)
-- [Scheduling, Scale and Performance](https://github.com/MarSik/kubevirt-ssp-operator)
+- [Scheduling, Scale and Performance](https://github.com/kubevirt/kubevirt-ssp-operator)
 - [Cluster Network Addons](https://github.com/kubevirt/cluster-network-addons-operator)
 - [Node Maintenance](https://github.com/kubevirt/node-maintenance-operator)
 
@@ -17,19 +17,17 @@ Use it to obtain an opinionated deployment of KubeVirt and its helper operators.
 
 ![](images/HCO-design.jpg)
 
-## Installing HCO Community Operator (OpenShift Only)
-The Hyperconverged Cluster Operator is published as a Community Operator in
-Operatorhub.io.  In the UI, you can search for it under the "OperatorHub"
-tab or deploy from the commandline:
-
-```bash
-$ curl https://raw.githubusercontent.com/kubevirt/hyperconverged-cluster-operator/master/deploy/hco.yaml | kubectl create -f -
-```
-
 ## Installing HCO using kustomize (Openshift OLM Only)
-Refer to [kustomize deployment documentation](deploy/kustomize/README.md).
+To install the default community HyperConverged Cluster Operator, along with its underlying components, run:
+```bash
+$ curl -L https://api.github.com/repos/kubevirt/hyperconverged-cluster-operator/tarball/master | \
+tar --strip-components=1 -xvzf - kubevirt-hyperconverged-cluster-operator-*/deploy/kustomize
 
-**NOTE**: `deploy/deploy_marketplace.sh` and `deploy/deploy_imageregistry.sh` will be deprecated soon.
+$ ./deploy/kustomize/deploy_kustomize.sh
+```
+The deployment is completed when HCO custom resource reports its condition as `Available`.
+
+For more explanation and advanced options for HCO deployment using kustomize, refer to [kustomize deployment documentation](deploy/kustomize/README.md).
 
 ## Installing Unreleased Bundles Using Marketplace
 The hyperconverged cluster operator will publish the lastest bundles to [quay/kubevirt-hyperconvered/hco-operatohub](https://quay.io/application/kubevirt-hyperconverged/hco-operatorhub)
@@ -54,7 +52,7 @@ $ curl https://raw.githubusercontent.com/kubevirt/hyperconverged-cluster-operato
 
 ## Developer Workflow
 If you want to make changes to the HCO, here's how you can test your changes
-through [OLM](https://github.com/operator-framework/operator-lifecycle-manager/blob/master/Documentation/install/install.md#installing-olm).
+through [OLM](https://github.com/operator-framework/operator-lifecycle-manager/blob/master/doc/install/install.md#installing-olm).
 
 Build the HCO container using the Makefile recipes `make container-build` and
 `make container-push` with vars `IMAGE_REGISTRY`, `OPERATOR_IMAGE`, and `IMAGE_TAG`
@@ -155,6 +153,7 @@ $ make cluster-sync
 ```
 ### Command-Line Tool
 Use `./cluster/kubectl.sh` as the command-line tool.
+
 For example:
 ```bash
 $ ./cluster/kubectl.sh get pods --all-namespaces

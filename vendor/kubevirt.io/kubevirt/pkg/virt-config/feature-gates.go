@@ -23,22 +23,25 @@ package virtconfig
  This module is intended for determining whether an optional feature is enabled or not at the cluster-level.
 */
 
-import (
-	"strings"
-)
-
 const (
 	CPUManager            = "CPUManager"
 	IgnitionGate          = "ExperimentalIgnitionSupport"
-	liveMigrationGate     = "LiveMigration"
+	LiveMigrationGate     = "LiveMigration"
 	CPUNodeDiscoveryGate  = "CPUNodeDiscovery"
 	HypervStrictCheckGate = "HypervStrictCheck"
 	SidecarGate           = "Sidecar"
 	GPUGate               = "GPU"
+	SnapshotGate          = "Snapshot"
+	HostDiskGate          = "HostDisk"
 )
 
 func (c *ClusterConfig) isFeatureGateEnabled(featureGate string) bool {
-	return strings.Contains(c.getConfig().FeatureGates, featureGate)
+	for _, fg := range c.GetConfig().DeveloperConfiguration.FeatureGates {
+		if fg == featureGate {
+			return true
+		}
+	}
+	return false
 }
 
 func (config *ClusterConfig) CPUManagerEnabled() bool {
@@ -50,7 +53,7 @@ func (config *ClusterConfig) IgnitionEnabled() bool {
 }
 
 func (config *ClusterConfig) LiveMigrationEnabled() bool {
-	return config.isFeatureGateEnabled(liveMigrationGate)
+	return config.isFeatureGateEnabled(LiveMigrationGate)
 }
 
 func (config *ClusterConfig) HypervStrictCheckEnabled() bool {
@@ -67,4 +70,12 @@ func (config *ClusterConfig) SidecarEnabled() bool {
 
 func (config *ClusterConfig) GPUPassthroughEnabled() bool {
 	return config.isFeatureGateEnabled(GPUGate)
+}
+
+func (config *ClusterConfig) SnapshotEnabled() bool {
+	return config.isFeatureGateEnabled(SnapshotGate)
+}
+
+func (config *ClusterConfig) HostDiskEnabled() bool {
+	return config.isFeatureGateEnabled(HostDiskGate)
 }
