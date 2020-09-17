@@ -28,7 +28,7 @@ jobs:
       - name: 'Comment PR'
         uses: actions/github-script@0.3.0
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const { issue: { number: 18 }, repo: { owner, repo }  } = context;
             github.issues.createComment({ issue_number, owner, repo, body: 'Hello from override bot ! 👋' })
