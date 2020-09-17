@@ -9,9 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the latest code
-          uses: actions/checkout@v2
-          with:
-            fetch-depth: 0
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
       - name: Find Lanes for Override across open PRs
         run: python ./automation/override-bot/override-bot.py
         env:
