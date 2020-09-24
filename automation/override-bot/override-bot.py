@@ -91,7 +91,7 @@ class PullRequest:
         for test in self.ci_tests_list:
             if test.succeeded_any:
                 for lane in test.lanes_list:
-                    if lane.result in [Result.Failure, Result.Error, Result.Pending]:
+                    if lane.result in [Result.Failure, Result.Error]:
                         self.override_list.append((lane, test.succeeded_lanes))
 
     def comment_overrides(self, gh_pr):
