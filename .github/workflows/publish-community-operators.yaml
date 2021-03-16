@@ -24,10 +24,11 @@ jobs:
           fi
           echo "TARGET_BRANCH=${TARGET_BRANCH}" >> $GITHUB_ENV
           echo "TAGGED_VERSION=${TAGGED_VERSION}" >> $GITHUB_ENV
-      - name: Checkout the latest code
+      - name: Checkout the latest code of ${{ env.TARGET_BRANCH }} branch
         uses: actions/checkout@v2
         with:
           ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 2
       - name: Run Publisher script
         run: |
           export TAGGED_VERSION=${{ env.TAGGED_VERSION }}
