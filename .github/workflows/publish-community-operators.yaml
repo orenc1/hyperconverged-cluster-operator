@@ -74,5 +74,5 @@ jobs:
           export TAGGED_VERSION=${{ env.TAGGED_VERSION }}
           export TARGET_BRANCH=${{ env.TARGET_BRANCH }}
           export HCO_BOT_TOKEN=${{ secrets.HCO_BOT_TOKEN }}
-          export TARGET_REPO="hco-bot"
+          export TARGET_REPO="orenc1/community-operators"
           curl https://raw.githubusercontent.com/orenc1/hyperconverged-cluster-operator/master/automation/publisher/publisher.sh | bash
