@@ -359,6 +359,7 @@ var _ = Describe("HyperconvergedController", func() {
 				hco.Spec.Infra = hcov1beta1.HyperConvergedConfig{NodePlacement: commonTestUtils.NewNodePlacement()}
 				hco.Spec.Workloads = hcov1beta1.HyperConvergedConfig{NodePlacement: commonTestUtils.NewNodePlacement()}
 				existingResource, err := operands.NewKubeVirt(hco, namespace)
+				existingResource.Kind = kubevirtv1.KubeVirtGroupVersionKind.Kind // necessary for metrics
 				Expect(err).ToNot(HaveOccurred())
 				existingResource.Kind = kubevirtv1.KubeVirtGroupVersionKind.Kind // necessary for metrics
 
@@ -419,6 +420,7 @@ var _ = Describe("HyperconvergedController", func() {
 				hco.Spec.Infra = hcov1beta1.HyperConvergedConfig{NodePlacement: commonTestUtils.NewNodePlacement()}
 				hco.Spec.Workloads = hcov1beta1.HyperConvergedConfig{NodePlacement: commonTestUtils.NewNodePlacement()}
 				existingResource, err := operands.NewKubeVirt(hco, namespace)
+				existingResource.Kind = kubevirtv1.KubeVirtGroupVersionKind.Kind // necessary for metrics
 				Expect(err).ToNot(HaveOccurred())
 				existingResource.Kind = kubevirtv1.KubeVirtGroupVersionKind.Kind // necessary for metrics
 
