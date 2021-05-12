@@ -527,6 +527,12 @@ func (GuestAgentCommandInfo) SwaggerDoc() map[string]string {
 	}
 }
 
+func (GuestAgentCommandInfo) SwaggerDoc() map[string]string {
+	return map[string]string{
+		"": "List of commands that QEMU guest agent supports\n\n+k8s:openapi-gen=true",
+	}
+}
+
 func (VirtualMachineInstanceGuestOSUserList) SwaggerDoc() map[string]string {
 	return map[string]string{
 		"": "VirtualMachineInstanceGuestOSUserList comprises the list of all active users on guest machine\n\n+k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object\n+k8s:openapi-gen=true",
