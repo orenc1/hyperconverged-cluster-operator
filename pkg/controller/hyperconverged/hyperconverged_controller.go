@@ -336,7 +336,6 @@ func (r *ReconcileHyperConverged) doReconcile(req *common.HcoRequest) (reconcile
 			return reconcile.Result{Requeue: true}, nil
 		}
 	}
-	r.recoverHCOVersion(req)
 
 	return r.EnsureOperandAndComplete(req, init)
 }
@@ -356,12 +355,9 @@ func (r *ReconcileHyperConverged) EnsureOperandAndComplete(req *common.HcoReques
 		return reconcile.Result{Requeue: true}, nil
 	}
 
-	// we want to requeue if we just exited from upgrade mode, trigger the update of the spec.version field. This is
-	// done because we never write both to the spec/metadata and to the status in the same call, so we want to update
-	// this spec filed in the next call.
-	exitedUpgradeMode := r.completeReconciliation(req)
+	r.completeReconciliation(req)
 
-	return reconcile.Result{Requeue: exitedUpgradeMode}, nil
+	return reconcile.Result{}, nil
 }
 
 func updateStatusGeneration(req *common.HcoRequest) {
@@ -745,19 +741,16 @@ func (r *ReconcileHyperConverged) aggregateComponentConditions(req *common.HcoRe
 	return allComponentsAreUp
 }
 
-func (r *ReconcileHyperConverged) completeReconciliation(req *common.HcoRequest) bool {
+func (r *ReconcileHyperConverged) completeReconciliation(req *common.HcoRequest) {
 	allComponentsAreUp := r.aggregateComponentConditions(req)
 
 	hcoReady := false
-	exitedUpgradeMode := false
 
 	if allComponentsAreUp {
 		req.Logger.Info("No component operator reported negatively")
 
 		// if in upgrade mode, and all the components are upgraded, and nothing pending to be written - upgrade is completed
 		if r.upgradeMode && req.ComponentUpgradeInProgress && !req.Dirty {
-			exitedUpgradeMode = true
-
 			// update the new version only when upgrade is completed
 			req.Instance.Status.UpdateVersion(hcoVersionName, r.ownVersion)
 			req.StatusDirty = true
@@ -799,7 +792,6 @@ func (r *ReconcileHyperConverged) completeReconciliation(req *common.HcoRequest)
 	}
 
 	r.updateConditions(req)
-	return exitedUpgradeMode
 }
 
 // This function is used to exit from the reconcile function, updating the conditions and returns the reconcile result
