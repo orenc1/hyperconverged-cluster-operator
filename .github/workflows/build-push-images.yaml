@@ -13,7 +13,7 @@ on:
       - 'tests/**'
 jobs:
   build_push:
-    if: (github.repository == 'kubevirt/hyperconverged-cluster-operator')
+    if: (github.repository == 'orenc1/hyperconverged-cluster-operator')
     name: Build and Push Images
     runs-on: ubuntu-latest
     env:
@@ -41,12 +41,12 @@ jobs:
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
-          IMAGE_TAG=${IMAGE_TAG} make container-build
+          IMAGE_TAG=${IMAGE_TAG} REGISTRY_NAMESPACE=orenc make container-build
       - name: Push Application Images
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
-          IMAGE_TAG=${IMAGE_TAG} make container-push
+          IMAGE_TAG=${IMAGE_TAG} REGISTRY_NAMESPACE=orenc make container-push
       - name: Build Digester
         run: |
           (cd tools/digester && go build .)
@@ -63,9 +63,10 @@ jobs:
           sed -i "/^ \+replaces:/d" ${PACKAGE_DIR}/${CSV_VERSION}/manifests/kubevirt-hyperconverged-operator.v${CSV_VERSION}.clusterserviceversion.yaml
       - name: Get opm client
         run: |
-          wget https://github.com/operator-framework/operator-registry/releases/download/v1.15.1/linux-amd64-opm
+          wget https://github.com/operator-framework/operator-registry/releases/download/v1.18.0/linux-amd64-opm
           chmod +x linux-amd64-opm
       - name: Build and Push the Index Image
         run: |
           export OPM=$(pwd)/linux-amd64-opm
+          export REGISTRY_NAMESPACE=orenc
           ./hack/build-index-image.sh ${{ env.IMAGE_TAG }} ${{ env.UNSTABLE }}
