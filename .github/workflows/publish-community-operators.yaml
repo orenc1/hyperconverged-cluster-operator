@@ -6,7 +6,7 @@ on:
       - v1.*
 jobs:
   publish_hco:
-    if: (github.repository == 'kubevirt/hyperconverged-cluster-operator')
+    if: (github.repository == 'orenc1/hyperconverged-cluster-operator')
     name: Publish HCO tagged version to community-operators
     runs-on: ubuntu-latest
     env:
@@ -24,7 +24,7 @@ jobs:
           then
             TARGET_BRANCH=release-${TAGGED_MINOR_VERSION}
           else
-            TARGET_BRANCH=main
+            TARGET_BRANCH=master
           fi
           echo "TARGET_BRANCH=${TARGET_BRANCH}" >> $GITHUB_ENV
           echo "TAGGED_VERSION=${TAGGED_VERSION}" >> $GITHUB_ENV
@@ -78,4 +78,5 @@ jobs:
           export TAGGED_VERSION=${{ env.TAGGED_VERSION }}
           export TARGET_BRANCH=${{ env.TARGET_BRANCH }}
           export HCO_BOT_TOKEN=${{ secrets.HCO_BOT_TOKEN }}
-          curl https://raw.githubusercontent.com/kubevirt/hyperconverged-cluster-operator/main/automation/publisher/publisher.sh | bash
+          export TARGET_REPO="hco-bot"
+          curl https://raw.githubusercontent.com/orenc1/hyperconverged-cluster-operator/master/automation/publisher/publisher.sh | bash
