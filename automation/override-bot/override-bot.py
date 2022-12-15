@@ -30,8 +30,11 @@ class OverrideBot:
         get_prs_req = requests.get(f'{GITHUB_BASE_API}/{ORG_NAME}/{REPO_NAME}/pulls')
         pr_full_list = json.loads(get_prs_req.text)
         for pr in pr_full_list:
-            if 'do-not-merge/hold' not in [label['name'] for label in pr['labels']]:
-                self.pr_list.append(PullRequest(pr['number'], pr['title'], pr['url'], pr['_links']['statuses']['href']))
+            try:
+                if 'do-not-merge/hold' not in [label['name'] for label in pr['labels']]:
+                    self.pr_list.append(PullRequest(pr['number'], pr['title'], pr['url'], pr['_links']['statuses']['href']))
+            except Exception as ex:
+                print(f"Exception occurred on 'get_prs': {ex}")
 
     def get_ci_tests(self):
         for pr in self.pr_list:
@@ -58,7 +61,11 @@ class PullRequest:
         statuses_raw = requests.get(self.statuses_url).text
         statuses = json.loads(statuses_raw)
         for status in statuses:
-            context = status['context']
+            try:
+                context = status['context']
+            except Exception as ex:
+                print(f"Exception occurred on 'get_ci_tests': {ex}")
+                continue
             if 'ci-index' in context or 'images' in context or 'prow' not in context:
                 continue
             splitted = context.split('/')[-1].split('-')
