@@ -35,6 +35,8 @@ class OverrideBot:
                     self.pr_list.append(PullRequest(pr['number'], pr['title'], pr['url'], pr['_links']['statuses']['href']))
             except Exception as ex:
                 print(f"Exception occurred on 'get_prs': {ex}")
+                print(pr)
+                print(label)
 
     def get_ci_tests(self):
         for pr in self.pr_list:
