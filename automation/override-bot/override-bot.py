@@ -31,12 +31,11 @@ class OverrideBot:
         pr_full_list = json.loads(get_prs_req.text)
         for pr in pr_full_list:
             try:
+                print (pr)
                 if 'do-not-merge/hold' not in [label['name'] for label in pr['labels']]:
                     self.pr_list.append(PullRequest(pr['number'], pr['title'], pr['url'], pr['_links']['statuses']['href']))
             except Exception as ex:
                 print(f"Exception occurred on 'get_prs': {ex}")
-                print(pr)
-                print(label)
 
     def get_ci_tests(self):
         for pr in self.pr_list:
