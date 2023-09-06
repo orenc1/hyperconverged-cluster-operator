@@ -2,6 +2,8 @@
 This document describes the tests that are part of the HyperConverged Cluster Operator (HCO) repository. Please update
 this document as part of test contribution.
 
+bdika
+
 ## Unit Tests
 Any change to the source code must be covered by unit tests. The HCO repository uses the
 [ginkgo testing framework](https://onsi.github.io/ginkgo/) (together with the [gomega matcher/assertion library](https://onsi.github.io/gomega/)) to implement the unit tests.
