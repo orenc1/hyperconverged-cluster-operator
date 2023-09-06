@@ -12,7 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -79,7 +79,7 @@ var _ = Describe("Test OwnResources", func() {
 						APIVersion: "operators.coreos.com/v1alpha1",
 						Kind:       csvv1alpha1.ClusterServiceVersionKind,
 						Name:       rsName,
-						Controller: pointer.Bool(true),
+						Controller: ptr.To(true),
 					},
 				},
 			},
@@ -98,7 +98,7 @@ var _ = Describe("Test OwnResources", func() {
 						APIVersion: "apps/v1",
 						Kind:       "Deployment",
 						Name:       rsName,
-						Controller: pointer.Bool(true),
+						Controller: ptr.To(true),
 					},
 				},
 			},
@@ -117,7 +117,7 @@ var _ = Describe("Test OwnResources", func() {
 						APIVersion: "apps/v1",
 						Kind:       "ReplicaSet",
 						Name:       rsName,
-						Controller: pointer.Bool(true),
+						Controller: ptr.To(true),
 					},
 				},
 			},
@@ -125,7 +125,8 @@ var _ = Describe("Test OwnResources", func() {
 
 		cl := fake.NewClientBuilder().
 			WithScheme(testScheme).
-			WithRuntimeObjects(csv, dep, rs, pod).
+			WithObjects(csv, dep, rs, pod).
+			WithStatusSubresource(csv, dep, rs, pod).
 			Build()
 
 		or := findOwnResources(context.Background(), cl, logger)

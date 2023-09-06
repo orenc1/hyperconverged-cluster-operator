@@ -7,8 +7,11 @@ package alerts
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"reflect"
+	"strings"
 
 	"github.com/go-logr/logr"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -21,24 +24,43 @@ import (
 
 const (
 	alertRuleGroup                = "kubevirt.hyperconverged.rules"
-	outOfBandUpdateAlert          = "KubevirtHyperconvergedClusterOperatorCRModification"
-	unsafeModificationAlert       = "KubevirtHyperconvergedClusterOperatorUSModification"
-	installationNotCompletedAlert = "KubevirtHyperconvergedClusterOperatorInstallationNotCompletedAlert"
+	outOfBandUpdateAlert          = "KubeVirtCRModified"
+	unsafeModificationAlert       = "UnsupportedHCOModification"
+	installationNotCompletedAlert = "HCOInstallationIncomplete"
+	singleStackIPv6Alert          = "SingleStackIPv6Unsupported"
 	severityAlertLabelKey         = "severity"
+	healthImpactAlertLabelKey     = "operator_health_impact"
 	partOfAlertLabelKey           = "kubernetes_operator_part_of"
 	partOfAlertLabelValue         = "kubevirt"
 	componentAlertLabelKey        = "kubernetes_operator_component"
 	componentAlertLabelValue      = "hyperconverged-cluster-operator"
 	ruleName                      = hcoutil.HyperConvergedName + "-prometheus-rule"
+	defaultRunbookURLTemplate     = "https://kubevirt.io/monitoring/runbooks/%s"
+	runbookURLTemplateEnv         = "RUNBOOK_URL_TEMPLATE"
 )
 
-var (
-	runbookUrlTemplate = "https://kubevirt.io/monitoring/runbooks/%s"
+type runbookCreator struct {
+	template string
+}
 
-	outOfBandUpdateRunbookUrl          = fmt.Sprintf(runbookUrlTemplate, outOfBandUpdateAlert)
-	unsafeModificationRunbookUrl       = fmt.Sprintf(runbookUrlTemplate, unsafeModificationAlert)
-	installationNotCompletedRunbookUrl = fmt.Sprintf(runbookUrlTemplate, installationNotCompletedAlert)
-)
+func newRunbookCreator() *runbookCreator {
+	runbookURLTemplate, exists := os.LookupEnv(runbookURLTemplateEnv)
+	if !exists {
+		runbookURLTemplate = defaultRunbookURLTemplate
+	}
+
+	if strings.Count(runbookURLTemplate, "%s") != 1 {
+		panic(errors.New("runbooks URL template must have exactly 1 %s substring"))
+	}
+
+	return &runbookCreator{
+		template: runbookURLTemplate,
+	}
+}
+
+func (r runbookCreator) getURL(alertName string) string {
+	return fmt.Sprintf(r.template, alertName)
+}
 
 type AlertRuleReconciler struct {
 	theRule *monitoringv1.PrometheusRule
@@ -108,7 +130,9 @@ func newPrometheusRule(namespace string, owner metav1.OwnerReference) *monitorin
 
 // NewPrometheusRuleSpec creates PrometheusRuleSpec for alert rules
 func NewPrometheusRuleSpec() *monitoringv1.PrometheusRuleSpec {
-	return &monitoringv1.PrometheusRuleSpec{
+	runbookCreator := newRunbookCreator()
+
+	spec := &monitoringv1.PrometheusRuleSpec{
 		Groups: []monitoringv1.RuleGroup{{
 			Name: alertRuleGroup,
 			Rules: []monitoringv1.Rule{
@@ -116,24 +140,34 @@ func NewPrometheusRuleSpec() *monitoringv1.PrometheusRuleSpec {
 				createUnsafeModificationAlertRule(),
 				createInstallationNotCompletedAlertRule(),
 				createRequestCPUCoresRule(),
+				createOperatorHealthStatusRule(),
+				createSingleStackIPv6AlertRule(),
 			},
 		}},
 	}
+
+	for _, rule := range spec.Groups[0].Rules {
+		if rule.Alert != "" {
+			rule.Annotations["runbook_url"] = runbookCreator.getURL(rule.Alert)
+			rule.Labels[partOfAlertLabelKey] = partOfAlertLabelValue
+			rule.Labels[componentAlertLabelKey] = componentAlertLabelValue
+		}
+	}
+
+	return spec
 }
 
 func createOutOfBandUpdateAlertRule() monitoringv1.Rule {
 	return monitoringv1.Rule{
 		Alert: outOfBandUpdateAlert,
-		Expr:  intstr.FromString("sum by(component_name) ((round(increase(kubevirt_hco_out_of_band_modifications_count[10m]))>0 and kubevirt_hco_out_of_band_modifications_count offset 10m) or (kubevirt_hco_out_of_band_modifications_count != 0 unless kubevirt_hco_out_of_band_modifications_count offset 10m))"),
+		Expr:  intstr.FromString("sum by(component_name) ((round(increase(kubevirt_hco_out_of_band_modifications_total[10m]))>0 and kubevirt_hco_out_of_band_modifications_total offset 10m) or (kubevirt_hco_out_of_band_modifications_total != 0 unless kubevirt_hco_out_of_band_modifications_total offset 10m))"),
 		Annotations: map[string]string{
 			"description": "Out-of-band modification for {{ $labels.component_name }}.",
 			"summary":     "{{ $value }} out-of-band CR modifications were detected in the last 10 minutes.",
-			"runbook_url": outOfBandUpdateRunbookUrl,
 		},
 		Labels: map[string]string{
-			severityAlertLabelKey:  "warning",
-			partOfAlertLabelKey:    partOfAlertLabelValue,
-			componentAlertLabelKey: componentAlertLabelValue,
+			severityAlertLabelKey:     "warning",
+			healthImpactAlertLabelKey: "warning",
 		},
 	}
 }
@@ -141,34 +175,31 @@ func createOutOfBandUpdateAlertRule() monitoringv1.Rule {
 func createUnsafeModificationAlertRule() monitoringv1.Rule {
 	return monitoringv1.Rule{
 		Alert: unsafeModificationAlert,
-		Expr:  intstr.FromString("sum by(annotation_name) ((kubevirt_hco_unsafe_modification_count)>0)"),
+		Expr:  intstr.FromString("sum by(annotation_name) ((kubevirt_hco_unsafe_modifications)>0)"),
 		Annotations: map[string]string{
 			"description": "unsafe modification for the {{ $labels.annotation_name }} annotation in the HyperConverged resource.",
 			"summary":     "{{ $value }} unsafe modifications were detected in the HyperConverged resource.",
-			"runbook_url": unsafeModificationRunbookUrl,
 		},
 		Labels: map[string]string{
-			severityAlertLabelKey:  "info",
-			partOfAlertLabelKey:    partOfAlertLabelValue,
-			componentAlertLabelKey: componentAlertLabelValue,
+			severityAlertLabelKey:     "info",
+			healthImpactAlertLabelKey: "warning",
 		},
 	}
 }
 
 func createInstallationNotCompletedAlertRule() monitoringv1.Rule {
+	var hour1 monitoringv1.Duration = "1h"
 	return monitoringv1.Rule{
 		Alert: installationNotCompletedAlert,
 		Expr:  intstr.FromString("kubevirt_hco_hyperconverged_cr_exists == 0"),
 		Annotations: map[string]string{
 			"description": "the installation was not completed; the HyperConverged custom resource is missing. In order to complete the installation of the Hyperconverged Cluster Operator you should create the HyperConverged custom resource.",
 			"summary":     "the installation was not completed; to complete the installation, create a HyperConverged custom resource.",
-			"runbook_url": installationNotCompletedRunbookUrl,
 		},
-		For: "1h",
+		For: &hour1,
 		Labels: map[string]string{
-			severityAlertLabelKey:  "info",
-			partOfAlertLabelKey:    partOfAlertLabelValue,
-			componentAlertLabelKey: componentAlertLabelValue,
+			severityAlertLabelKey:     "info",
+			healthImpactAlertLabelKey: "critical",
 		},
 	}
 }
@@ -178,5 +209,27 @@ func createRequestCPUCoresRule() monitoringv1.Rule {
 	return monitoringv1.Rule{
 		Record: "cluster:vmi_request_cpu_cores:sum",
 		Expr:   intstr.FromString(`sum(kube_pod_container_resource_requests{resource="cpu"} and on (pod) kube_pod_status_phase{phase="Running"} * on (pod) group_left kube_pod_labels{ label_kubevirt_io="virt-launcher"} > 0)`),
+	}
+}
+
+func createOperatorHealthStatusRule() monitoringv1.Rule {
+	return monitoringv1.Rule{
+		Record: "kubevirt_hyperconverged_operator_health_status",
+		Expr:   intstr.FromString(`label_replace(vector(2) and on() ((kubevirt_hco_system_health_status>1) or (count(ALERTS{kubernetes_operator_part_of="kubevirt", alertstate="firing", operator_health_impact="critical"})>0)) or (vector(1) and on() ((kubevirt_hco_system_health_status==1) or (count(ALERTS{kubernetes_operator_part_of="kubevirt", alertstate="firing", operator_health_impact="warning"})>0))) or vector(0),"name","kubevirt-hyperconverged","","")`),
+	}
+}
+
+func createSingleStackIPv6AlertRule() monitoringv1.Rule {
+	return monitoringv1.Rule{
+		Alert: singleStackIPv6Alert,
+		Expr:  intstr.FromString("kubevirt_hco_single_stack_ipv6 == 1"),
+		Annotations: map[string]string{
+			"description": "KubeVirt Hyperconverged is not supported on a single stack IPv6 cluster",
+			"summary":     "KubeVirt Hyperconverged is not supported on a single stack IPv6 cluster",
+		},
+		Labels: map[string]string{
+			severityAlertLabelKey:     "critical",
+			healthImpactAlertLabelKey: "critical",
+		},
 	}
 }

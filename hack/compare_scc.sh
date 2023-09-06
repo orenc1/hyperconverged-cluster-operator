@@ -19,31 +19,34 @@
 
 set -ex
 
+OUTPUT_DIR=${OUTPUT_DIR:-_out}
+SCC_OUTPUT_DIR="${OUTPUT_DIR}/scc"
+
 SCC_BEFORE_SUFFIX=.yaml.before
 SCC_AFTER_SUFFIX=.yaml.after
 
 function dump_sccs_before(){
     if [ "${CMD}" == "oc" ]; then
-        mkdir -p _out/scc
+        mkdir -pv "${SCC_OUTPUT_DIR}"
         for SCCNAME in $( ${CMD} get scc -o custom-columns=:metadata.name )
         do
-          echo -e "\n--- SCC ${SCCNAME} ---"
-          ${CMD} get scc ${SCCNAME} -o yaml > "_out/scc/${SCCNAME}${SCC_BEFORE_SUFFIX}" || true
-        done
-    else
-        echo "Ignoring SCCs on k8s"
-    fi
+      echo -e "\n--- SCC ${SCCNAME} ---"
+          ${CMD} get scc ${SCCNAME} -o yaml > "${SCC_OUTPUT_DIR}/${SCCNAME}${SCC_BEFORE_SUFFIX}" || true
+    done
+  else
+    echo "Ignoring SCCs on k8s"
+  fi
 }
 
 function dump_sccs_after(){
-    if [ "${CMD}" == "oc" ]; then
-        for f in _out/scc/*${SCC_BEFORE_SUFFIX}; do
+  if [ "${CMD}" == "oc" ] && [ "${KUBEVIRT_PROVIDER}" != "external" ]; then
+        for f in "${SCC_OUTPUT_DIR}"/*"${SCC_BEFORE_SUFFIX}"; do
            SCCNAME=$(basename --suffix=${SCC_BEFORE_SUFFIX} "$f")
            echo -e "\n--- SCC ${SCCNAME} ---"
-           ${CMD} get scc ${SCCNAME} -o yaml > "_out/scc/${SCCNAME}${SCC_AFTER_SUFFIX}" || true
-           diff -I '^\s*generation:.*$' -I '^\s*resourceVersion:.*$' -I '^\s*time:.*$' "_out/scc/${SCCNAME}${SCC_BEFORE_SUFFIX}" "_out/scc/${SCCNAME}${SCC_AFTER_SUFFIX}"
-        done
-    else
-        echo "Ignoring SCCs on k8s"
-    fi
+           ${CMD} get scc ${SCCNAME} -o yaml > "${SCC_OUTPUT_DIR}/${SCCNAME}${SCC_AFTER_SUFFIX}" || true
+           diff -I '^\s*generation:.*$' -I '^\s*resourceVersion:.*$' -I '^\s*time:.*$' "${SCC_OUTPUT_DIR}/${SCCNAME}${SCC_BEFORE_SUFFIX}" "${SCC_OUTPUT_DIR}/${SCCNAME}${SCC_AFTER_SUFFIX}"
+    done
+  else
+    echo "Ignoring SCCs on k8s"
+  fi
 }

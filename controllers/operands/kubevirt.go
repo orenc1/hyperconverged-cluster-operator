@@ -1,6 +1,7 @@
 package operands
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -8,10 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openshift/library-go/pkg/crypto"
-
 	openshiftconfigv1 "github.com/openshift/api/config/v1"
-
+	"github.com/openshift/library-go/pkg/crypto"
 	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -27,15 +26,16 @@ import (
 	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
 )
 
-const (
-	SELinuxLauncherType = "virt_launcher.process"
-)
-
 // env vars
 const (
 	kvmEmulationEnvName = "KVM_EMULATION"
 	smbiosEnvName       = "SMBIOS"
 	machineTypeEnvName  = "MACHINETYPE"
+)
+
+const (
+	DefaultAMD64OVMFPath         = "/usr/share/OVMF"
+	DefaultAMD64EmulatedMachines = "q35*,pc-q35*"
 )
 
 var (
@@ -95,6 +95,23 @@ const (
 
 	// Export VMs to outside of the cluster
 	kvVMExportGate = "VMExport"
+
+	// Disable the installation and usage of the custom SELinux policy
+	kvDisableCustomSELinuxPolicyGate = "DisableCustomSELinuxPolicy"
+
+	// Enable the installation of the KubeVirt seccomp profile
+	kvKubevirtSeccompProfile = "KubevirtSeccompProfile"
+
+	// Allow attaching a NIC to a running VMI
+	kvHotplugNicsGate = "HotplugNICs"
+
+	// Enable VM state persistence
+	kvVMPersistentState = "VMPersistentState"
+)
+
+const (
+	highBurstProfileBurst = 400
+	highBurstProfileQPS   = 200
 )
 
 var (
@@ -111,6 +128,10 @@ var (
 		kvDownwardMetricsGate,
 		kvNUMA,
 		kvVMExportGate,
+		kvDisableCustomSELinuxPolicyGate,
+		kvKubevirtSeccompProfile,
+		kvHotplugNicsGate,
+		kvVMPersistentState,
 	}
 
 	// holds a list of mandatory KubeVirt feature gates. Some of them are the hard coded feature gates and some of
@@ -137,7 +158,9 @@ var (
 // KubeVirt feature gates that are exposed in HCO API
 const (
 	kvWithHostPassthroughCPU = "WithHostPassthroughCPU"
-	kvNonRoot                = "NonRoot"
+	kvRoot                   = "Root"
+	kvDisableMDevConfig      = "DisableMDEVConfiguration"
+	kvPersistentReservation  = "PersistentReservation"
 )
 
 // CPU Plugin default values
@@ -181,6 +204,11 @@ func newKubevirtHandler(Client client.Client, Scheme *runtime.Scheme) *kubevirtH
 
 type kubevirtHooks struct {
 	cache *kubevirtcorev1.KubeVirt
+}
+
+type rateLimits struct {
+	QPS   float32 `json:"qps"`
+	Burst int     `json:"burst"`
 }
 
 func (h *kubevirtHooks) getFullCr(hc *hcov1beta1.HyperConverged) (client.Object, error) {
@@ -270,6 +298,61 @@ func NewKubeVirt(hc *hcov1beta1.HyperConverged, opts ...string) (*kubevirtcorev1
 	return kv, nil
 }
 
+func getHcoAnnotationTuning(hc *hcov1beta1.HyperConverged) (*kubevirtcorev1.ReloadableComponentConfiguration, error) {
+	if annotation, ok := hc.Annotations[common.TuningPolicyAnnotationName]; ok {
+
+		var rates rateLimits
+		err := json.Unmarshal([]byte(annotation), &rates)
+		if err != nil {
+			return nil, err
+		}
+
+		if rates.QPS <= 0 {
+			return nil, fmt.Errorf("qps parameter not found in annotation")
+		}
+		if rates.Burst <= 0 {
+			return nil, fmt.Errorf("burst parameter not found in annotation")
+		}
+		return &kubevirtcorev1.ReloadableComponentConfiguration{
+			RestClient: &kubevirtcorev1.RESTClientConfiguration{
+				RateLimiter: &kubevirtcorev1.RateLimiter{
+					TokenBucketRateLimiter: &kubevirtcorev1.TokenBucketRateLimiter{
+						QPS:   rates.QPS,
+						Burst: rates.Burst,
+					},
+				},
+			},
+		}, nil
+	}
+
+	return nil, fmt.Errorf("tuning policy set but annotation not present or wrong")
+}
+
+func getHcoHighBurstProfileTuningValues(hc *hcov1beta1.HyperConverged) (*kubevirtcorev1.ReloadableComponentConfiguration, error) {
+	if _, ok := hc.Annotations[common.TuningPolicyAnnotationName]; ok {
+		return nil, fmt.Errorf("highBurst profile is enabled and the annotation " + common.TuningPolicyAnnotationName + " is present")
+	}
+	return &kubevirtcorev1.ReloadableComponentConfiguration{
+		RestClient: &kubevirtcorev1.RESTClientConfiguration{
+			RateLimiter: &kubevirtcorev1.RateLimiter{
+				TokenBucketRateLimiter: &kubevirtcorev1.TokenBucketRateLimiter{
+					QPS:   highBurstProfileQPS,
+					Burst: highBurstProfileBurst,
+				},
+			},
+		},
+	}, nil
+}
+
+func hcoTuning2Kv(hc *hcov1beta1.HyperConverged) (*kubevirtcorev1.ReloadableComponentConfiguration, error) {
+	if hc.Spec.TuningPolicy == hcov1beta1.HyperConvergedAnnotationTuningPolicy {
+		return getHcoAnnotationTuning(hc)
+	} else if hc.Spec.TuningPolicy == hcov1beta1.HyperConvergedHighBurstProfile {
+		return getHcoHighBurstProfileTuningValues(hc)
+	}
+	return nil, nil
+}
+
 func hcWorkloadUpdateStrategyToKv(hcObject *hcov1beta1.HyperConvergedWorkloadUpdateStrategy) kubevirtcorev1.KubeVirtWorkloadUpdateStrategy {
 	kvObject := kubevirtcorev1.KubeVirtWorkloadUpdateStrategy{}
 	if hcObject != nil {
@@ -307,9 +390,15 @@ func getKVConfig(hc *hcov1beta1.HyperConverged) (*kubevirtcorev1.KubeVirtConfigu
 
 	obsoleteCPUs, minCPUModel := getObsoleteCPUConfig(hc.Spec.ObsoleteCPUs)
 
+	rateLimiter, err := hcoTuning2Kv(hc)
+	if err != nil {
+		return nil, err
+	}
+
+	seccompConfig := getKVSeccompConfig()
+
 	config := &kubevirtcorev1.KubeVirtConfiguration{
 		DeveloperConfiguration: devConfig,
-		SELinuxLauncherType:    SELinuxLauncherType,
 		NetworkConfiguration: &kubevirtcorev1.NetworkConfiguration{
 			NetworkInterface: string(kubevirtcorev1.MasqueradeInterface),
 		},
@@ -319,6 +408,12 @@ func getKVConfig(hc *hcov1beta1.HyperConverged) (*kubevirtcorev1.KubeVirtConfigu
 		ObsoleteCPUModels:            obsoleteCPUs,
 		MinCPUModel:                  minCPUModel,
 		TLSConfiguration:             hcTLSSecurityProfileToKv(hcoutil.GetClusterInfo().GetTLSSecurityProfile(hc.Spec.TLSSecurityProfile)),
+		APIConfiguration:             rateLimiter,
+		WebhookConfiguration:         rateLimiter,
+		ControllerConfiguration:      rateLimiter,
+		HandlerConfiguration:         rateLimiter,
+		SeccompConfiguration:         seccompConfig,
+		EvictionStrategy:             hc.Spec.EvictionStrategy,
 	}
 
 	if smbiosConfig, ok := os.LookupEnv(smbiosEnvName); ok {
@@ -334,11 +429,35 @@ func getKVConfig(hc *hcov1beta1.HyperConverged) (*kubevirtcorev1.KubeVirtConfigu
 	if val, ok := os.LookupEnv(machineTypeEnvName); ok {
 		if val = strings.TrimSpace(val); val != "" {
 			config.MachineType = val
+
+			config.ArchitectureConfiguration = &kubevirtcorev1.ArchConfiguration{
+				Amd64: &kubevirtcorev1.ArchSpecificConfiguration{
+					MachineType:      val,
+					OVMFPath:         DefaultAMD64OVMFPath,
+					EmulatedMachines: strings.Split(DefaultAMD64EmulatedMachines, ","),
+				},
+			}
 		}
 	}
 
 	if hc.Spec.DefaultCPUModel != nil {
 		config.CPUModel = *hc.Spec.DefaultCPUModel
+	}
+
+	if hc.Spec.DefaultRuntimeClass != nil {
+		config.DefaultRuntimeClass = *hc.Spec.DefaultRuntimeClass
+	}
+
+	if hc.Spec.VMStateStorageClass != nil {
+		config.VMStateStorageClass = *hc.Spec.VMStateStorageClass
+	}
+
+	if hc.Spec.VirtualMachineOptions != nil && hc.Spec.VirtualMachineOptions.DisableFreePageReporting {
+		config.VirtualMachineOptions = &kubevirtcorev1.VirtualMachineOptions{DisableFreePageReporting: &kubevirtcorev1.DisableFreePageReporting{}}
+	}
+
+	if hc.Spec.ResourceRequirements != nil {
+		config.AutoCPULimitNamespaceLabelSelector = hc.Spec.ResourceRequirements.AutoCPULimitNamespaceLabelSelector.DeepCopy()
 	}
 
 	return config, nil
@@ -367,8 +486,15 @@ func toKvMediatedDevicesConfiguration(mdevsConfig *hcov1beta1.MediatedDevicesCon
 		return nil
 	}
 
+	var mediatedDeviceTypes []string
+	if len(mdevsConfig.MediatedDeviceTypes) > 0 {
+		mediatedDeviceTypes = mdevsConfig.MediatedDeviceTypes
+	} else if len(mdevsConfig.MediatedDevicesTypes) > 0 { //nolint SA1019
+		mediatedDeviceTypes = mdevsConfig.MediatedDevicesTypes //nolint SA1019
+	}
+
 	return &kubevirtcorev1.MediatedDevicesConfiguration{
-		MediatedDevicesTypes:    mdevsConfig.MediatedDevicesTypes,
+		MediatedDeviceTypes:     mediatedDeviceTypes,
 		NodeMediatedDeviceTypes: toKvNodeMediatedDevicesConfiguration(mdevsConfig.NodeMediatedDeviceTypes),
 	}
 }
@@ -377,9 +503,17 @@ func toKvNodeMediatedDevicesConfiguration(hcoNodeMdevTypesConf []hcov1beta1.Node
 	if len(hcoNodeMdevTypesConf) > 0 {
 		nodeMdevTypesConf := make([]kubevirtcorev1.NodeMediatedDeviceTypesConfig, 0, len(hcoNodeMdevTypesConf))
 		for _, hcoNodeMdevTypeConf := range hcoNodeMdevTypesConf {
+
+			var mediatedDeviceTypes []string
+			if len(hcoNodeMdevTypeConf.MediatedDeviceTypes) > 0 {
+				mediatedDeviceTypes = hcoNodeMdevTypeConf.MediatedDeviceTypes
+			} else if len(hcoNodeMdevTypeConf.MediatedDevicesTypes) > 0 { //nolint SA1019
+				mediatedDeviceTypes = hcoNodeMdevTypeConf.MediatedDevicesTypes //nolint SA1019
+			}
+
 			nodeMdevTypesConf = append(nodeMdevTypesConf, kubevirtcorev1.NodeMediatedDeviceTypesConfig{
-				NodeSelector:         hcoNodeMdevTypeConf.NodeSelector,
-				MediatedDevicesTypes: hcoNodeMdevTypeConf.MediatedDevicesTypes,
+				NodeSelector:        hcoNodeMdevTypeConf.NodeSelector,
+				MediatedDeviceTypes: mediatedDeviceTypes,
 			})
 		}
 		return nodeMdevTypesConf
@@ -436,7 +570,7 @@ func toKvMediatedDevices(hcoMediatedDevices []hcov1beta1.MediatedHostDevice) []k
 }
 
 func hcLiveMigrationToKv(lm hcov1beta1.LiveMigrationConfigurations) (*kubevirtcorev1.MigrationConfiguration, error) {
-	var bandwidthPerMigration *resource.Quantity = nil
+	var bandwidthPerMigration *resource.Quantity
 	if lm.BandwidthPerMigration != nil {
 		bandwidthPerMigrationObject, err := resource.ParseQuantity(*lm.BandwidthPerMigration)
 		if err != nil {
@@ -452,6 +586,8 @@ func hcLiveMigrationToKv(lm hcov1beta1.LiveMigrationConfigurations) (*kubevirtco
 		ParallelMigrationsPerCluster:      lm.ParallelMigrationsPerCluster,
 		ProgressTimeout:                   lm.ProgressTimeout,
 		Network:                           lm.Network,
+		AllowAutoConverge:                 lm.AllowAutoConverge,
+		AllowPostCopy:                     lm.AllowPostCopy,
 	}, nil
 }
 
@@ -513,8 +649,23 @@ func getKVDevConfig(hc *hcov1beta1.HyperConverged) (*kubevirtcorev1.DeveloperCon
 	if lv := hc.Spec.LogVerbosityConfig; lv != nil && lv.Kubevirt != nil {
 		devConf.LogVerbosity = lv.Kubevirt.DeepCopy()
 	}
+	if hc.Spec.ResourceRequirements != nil && hc.Spec.ResourceRequirements.VmiCPUAllocationRatio != nil {
+		devConf.CPUAllocationRatio = *hc.Spec.ResourceRequirements.VmiCPUAllocationRatio
+	}
 
 	return devConf, nil
+}
+
+// Static for now, could be configured in the HCO CR in the future
+func getKVSeccompConfig() *kubevirtcorev1.SeccompConfiguration {
+	kubevirtProfile := "kubevirt/kubevirt.json"
+	return &kubevirtcorev1.SeccompConfiguration{
+		VirtualMachineInstanceProfile: &kubevirtcorev1.VirtualMachineInstanceProfile{
+			CustomProfile: &kubevirtcorev1.CustomProfile{
+				LocalhostProfile: &kubevirtProfile,
+			},
+		},
+	}
 }
 
 func NewKubeVirtWithNameOnly(hc *hcov1beta1.HyperConverged, opts ...string) *kubevirtcorev1.KubeVirt {
@@ -569,8 +720,14 @@ func getFeatureGateChecks(featureGates *hcov1beta1.HyperConvergedFeatureGates) [
 		fgs = append(fgs, kvWithHostPassthroughCPU)
 	}
 
-	if featureGates.NonRoot != nil && *featureGates.NonRoot {
-		fgs = append(fgs, kvNonRoot)
+	if featureGates.NonRoot != nil && !*featureGates.NonRoot { //nolint SA1019
+		fgs = append(fgs, kvRoot)
+	}
+	if featureGates.DisableMDevConfiguration != nil && *featureGates.DisableMDevConfiguration {
+		fgs = append(fgs, kvDisableMDevConfig)
+	}
+	if featureGates.PersistentReservation != nil && *featureGates.PersistentReservation {
+		fgs = append(fgs, kvPersistentReservation)
 	}
 
 	return fgs
@@ -641,7 +798,7 @@ func NewKubeVirtPriorityClass(hc *hcov1beta1.HyperConverged) *schedulingv1.Prior
 			Kind:       "PriorityClass",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   "kubevirt-cluster-critical",
+			Name:   kvPriorityClass,
 			Labels: getLabels(hc, hcoutil.AppComponentCompute),
 		},
 		// 1 billion is the highest value we can set

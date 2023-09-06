@@ -2,38 +2,32 @@ package validator
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
+	openshiftconfigv1 "github.com/openshift/api/config/v1"
+	"github.com/samber/lo"
+	xsync "golang.org/x/sync/errgroup"
+	admissionv1 "k8s.io/api/admission/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/strings/slices"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	openshiftconfigv1 "github.com/openshift/api/config/v1"
-
-	"github.com/go-logr/logr"
-	admissionv1 "k8s.io/api/admission/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	networkaddonsv1 "github.com/kubevirt/cluster-network-addons-operator/pkg/apis/networkaddonsoperator/v1"
-	ttov1alpha1 "github.com/kubevirt/tekton-tasks-operator/api/v1alpha1"
 	kubevirtcorev1 "kubevirt.io/api/core/v1"
 	cdiv1beta1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
-	sspv1beta1 "kubevirt.io/ssp-operator/api/v1beta1"
-
-	"github.com/openshift/library-go/pkg/crypto"
+	sspv1beta2 "kubevirt.io/ssp-operator/api/v1beta2"
 
 	"github.com/kubevirt/hyperconverged-cluster-operator/api/v1beta1"
 	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/operands"
 	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
-
-	"github.com/samber/lo"
 )
 
 const (
@@ -48,15 +42,16 @@ type WebhookHandler struct {
 	decoder     *admission.Decoder
 }
 
-var hcoTlsConfigCache *openshiftconfigv1.TLSSecurityProfile
+var hcoTLSConfigCache *openshiftconfigv1.TLSSecurityProfile
 
-func NewWebhookHandler(logger logr.Logger, cli client.Client, namespace string, isOpenshift bool, hcoTlsSecurityProfile *openshiftconfigv1.TLSSecurityProfile) *WebhookHandler {
-	hcoTlsConfigCache = hcoTlsSecurityProfile
+func NewWebhookHandler(logger logr.Logger, cli client.Client, decoder *admission.Decoder, namespace string, isOpenshift bool, hcoTLSSecurityProfile *openshiftconfigv1.TLSSecurityProfile) *WebhookHandler {
+	hcoTLSConfigCache = hcoTLSSecurityProfile
 	return &WebhookHandler{
 		logger:      logger,
 		cli:         cli,
 		namespace:   namespace,
 		isOpenshift: isOpenshift,
+		decoder:     decoder,
 	}
 }
 
@@ -112,16 +107,7 @@ func (wh *WebhookHandler) Handle(ctx context.Context, req admission.Request) adm
 	return admission.Allowed("")
 }
 
-var _ admission.DecoderInjector = &WebhookHandler{}
-
-// InjectDecoder injects the decoder.
-// WebhookHandler implements admission.DecoderInjector so a decoder will be automatically injected.
-func (wh *WebhookHandler) InjectDecoder(d *admission.Decoder) error {
-	wh.decoder = d
-	return nil
-}
-
-func (wh *WebhookHandler) ValidateCreate(ctx context.Context, dryrun bool, hc *v1beta1.HyperConverged) error {
+func (wh *WebhookHandler) ValidateCreate(_ context.Context, dryrun bool, hc *v1beta1.HyperConverged) error {
 	wh.logger.Info("Validating create", "name", hc.Name, "namespace:", hc.Namespace)
 
 	if err := wh.validateCertConfig(hc); err != nil {
@@ -136,7 +122,11 @@ func (wh *WebhookHandler) ValidateCreate(ctx context.Context, dryrun bool, hc *v
 		return err
 	}
 
-	if err := wh.validateTlsSecurityProfiles(hc); err != nil {
+	if err := wh.validateTLSSecurityProfiles(hc); err != nil {
+		return err
+	}
+
+	if err := wh.validateMediatedDeviceTypes(hc); err != nil {
 		return err
 	}
 
@@ -152,8 +142,12 @@ func (wh *WebhookHandler) ValidateCreate(ctx context.Context, dryrun bool, hc *v
 		return err
 	}
 
+	if _, _, err := operands.NewSSP(hc); err != nil {
+		return err
+	}
+
 	if !dryrun {
-		hcoTlsConfigCache = hc.Spec.TLSSecurityProfile
+		hcoTLSConfigCache = hc.Spec.TLSSecurityProfile
 	}
 
 	return nil
@@ -184,18 +178,20 @@ func (wh *WebhookHandler) getOperands(requested *v1beta1.HyperConverged) (*kubev
 
 // ValidateUpdate is the ValidateUpdate webhook implementation. It calls all the resources in parallel, to dry-run the
 // upgrade.
-func (wh *WebhookHandler) ValidateUpdate(extCtx context.Context, dryrun bool, requested *v1beta1.HyperConverged, exists *v1beta1.HyperConverged) error {
+func (wh *WebhookHandler) ValidateUpdate(ctx context.Context, dryrun bool, requested *v1beta1.HyperConverged, exists *v1beta1.HyperConverged) error {
+	wh.logger.Info("Validating update", "name", requested.Name)
+
 	if err := wh.validateDataImportCronTemplates(requested); err != nil {
 		return err
 	}
 
-	if err := wh.validateTlsSecurityProfiles(requested); err != nil {
+	if err := wh.validateTLSSecurityProfiles(requested); err != nil {
 		return err
 	}
 
-	wh.logger.Info("Validating update", "name", requested.Name)
-	ctx, cancel := context.WithTimeout(context.Background(), updateDryRunTimeOut)
-	defer cancel()
+	if err := wh.validateMediatedDeviceTypes(requested); err != nil {
+		return err
+	}
 
 	// If no change is detected in the spec nor the annotations - nothing to validate
 	if reflect.DeepEqual(exists.Spec, requested.Spec) &&
@@ -208,10 +204,10 @@ func (wh *WebhookHandler) ValidateUpdate(extCtx context.Context, dryrun bool, re
 		return err
 	}
 
-	wg := sync.WaitGroup{}
-	errorCh := make(chan error)
-	done := make(chan bool)
+	toCtx, cancel := context.WithTimeout(ctx, updateDryRunTimeOut)
+	defer cancel()
 
+	eg, egCtx := xsync.WithContext(toCtx)
 	opts := &client.UpdateOptions{DryRun: []string{metav1.DryRunAll}}
 
 	resources := []client.Object{
@@ -228,44 +224,28 @@ func (wh *WebhookHandler) ValidateUpdate(extCtx context.Context, dryrun bool, re
 		resources = append(resources, ssp)
 	}
 
-	wg.Add(len(resources))
-
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
 	for _, obj := range resources {
-		go func(o client.Object, wgr *sync.WaitGroup) {
-			defer wgr.Done()
-			if err := wh.updateOperatorCr(ctx, requested, o, opts); err != nil {
-				errorCh <- err
-			}
-		}(obj, &wg)
+		func(o client.Object) {
+			eg.Go(func() error {
+				return wh.updateOperatorCr(egCtx, requested, o, opts)
+			})
+		}(obj)
 	}
 
-	select {
-	case err := <-errorCh:
+	err = eg.Wait()
+	if err != nil {
 		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-done:
-		// just in case close(done) was selected while there is an error,
-		// check the error channel again.
-		if len(errorCh) != 0 {
-			err := <-errorCh
-			return err
-		}
-
-		if !dryrun {
-			hcoTlsConfigCache = requested.Spec.TLSSecurityProfile
-		}
-		return nil
 	}
+
+	if !dryrun {
+		hcoTLSConfigCache = requested.Spec.TLSSecurityProfile
+	}
+
+	return nil
 }
 
-func (wh WebhookHandler) updateOperatorCr(ctx context.Context, hc *v1beta1.HyperConverged, exists client.Object, opts *client.UpdateOptions) error {
-	err := hcoutil.GetRuntimeObject(ctx, wh.cli, exists, wh.logger)
+func (wh *WebhookHandler) updateOperatorCr(ctx context.Context, hc *v1beta1.HyperConverged, exists client.Object, opts *client.UpdateOptions) error {
+	err := hcoutil.GetRuntimeObject(ctx, wh.cli, exists)
 	if err != nil {
 		wh.logger.Error(err, "failed to get object from kubernetes", "kind", exists.GetObjectKind())
 		return err
@@ -293,20 +273,12 @@ func (wh WebhookHandler) updateOperatorCr(ctx context.Context, hc *v1beta1.Hyper
 		}
 		required.Spec.DeepCopyInto(&existing.Spec)
 
-	case *sspv1beta1.SSP:
+	case *sspv1beta2.SSP:
 		required, _, err := operands.NewSSP(hc)
 		if err != nil {
 			return err
 		}
 		required.Spec.DeepCopyInto(&existing.Spec)
-
-	case *ttov1alpha1.TektonTasks:
-		required := operands.NewTTO(hc)
-		if err != nil {
-			return err
-		}
-		required.Spec.DeepCopyInto(&existing.Spec)
-
 	}
 
 	if err = wh.cli.Update(ctx, exists, opts); err != nil {
@@ -318,7 +290,7 @@ func (wh WebhookHandler) updateOperatorCr(ctx context.Context, hc *v1beta1.Hyper
 	return nil
 }
 
-func (wh WebhookHandler) ValidateDelete(ctx context.Context, dryrun bool, hc *v1beta1.HyperConverged) error {
+func (wh *WebhookHandler) ValidateDelete(ctx context.Context, dryrun bool, hc *v1beta1.HyperConverged) error {
 	wh.logger.Info("Validating delete", "name", hc.Name, "namespace", hc.Namespace)
 
 	kv := operands.NewKubeVirtWithNameOnly(hc)
@@ -335,12 +307,12 @@ func (wh WebhookHandler) ValidateDelete(ctx context.Context, dryrun bool, hc *v1
 		}
 	}
 	if !dryrun {
-		hcoTlsConfigCache = nil
+		hcoTLSConfigCache = nil
 	}
 	return nil
 }
 
-func (wh WebhookHandler) validateCertConfig(hc *v1beta1.HyperConverged) error {
+func (wh *WebhookHandler) validateCertConfig(hc *v1beta1.HyperConverged) error {
 	minimalDuration := metav1.Duration{Duration: 10 * time.Minute}
 
 	ccValues := make(map[string]time.Duration)
@@ -370,7 +342,7 @@ func (wh WebhookHandler) validateCertConfig(hc *v1beta1.HyperConverged) error {
 	return nil
 }
 
-func (wh WebhookHandler) validateDataImportCronTemplates(hc *v1beta1.HyperConverged) error {
+func (wh *WebhookHandler) validateDataImportCronTemplates(hc *v1beta1.HyperConverged) error {
 
 	for _, dict := range hc.Spec.DataImportCronTemplates {
 		val, ok := dict.Annotations[hcoutil.DataImportCronEnabledAnnotation]
@@ -389,7 +361,7 @@ func (wh WebhookHandler) validateDataImportCronTemplates(hc *v1beta1.HyperConver
 	return nil
 }
 
-func (wh WebhookHandler) validateTlsSecurityProfiles(hc *v1beta1.HyperConverged) error {
+func (wh *WebhookHandler) validateTLSSecurityProfiles(hc *v1beta1.HyperConverged) error {
 	tlsSP := hc.Spec.TLSSecurityProfile
 
 	if tlsSP == nil || tlsSP.Custom == nil {
@@ -403,6 +375,21 @@ func (wh WebhookHandler) validateTlsSecurityProfiles(hc *v1beta1.HyperConverged)
 	return nil
 }
 
+func (wh *WebhookHandler) validateMediatedDeviceTypes(hc *v1beta1.HyperConverged) error {
+	mdc := hc.Spec.MediatedDevicesConfiguration
+	if mdc != nil {
+		if len(mdc.MediatedDevicesTypes) > 0 && len(mdc.MediatedDeviceTypes) > 0 && !slices.Equal(mdc.MediatedDevicesTypes, mdc.MediatedDeviceTypes) { //nolint SA1019
+			return fmt.Errorf("mediatedDevicesTypes is deprecated, please use mediatedDeviceTypes instead")
+		}
+		for _, nmdc := range mdc.NodeMediatedDeviceTypes {
+			if len(nmdc.MediatedDevicesTypes) > 0 && len(nmdc.MediatedDeviceTypes) > 0 && !slices.Equal(nmdc.MediatedDevicesTypes, nmdc.MediatedDeviceTypes) { //nolint SA1019
+				return fmt.Errorf("mediatedDevicesTypes is deprecated, please use mediatedDeviceTypes instead")
+			}
+		}
+	}
+	return nil
+}
+
 func hasRequiredHTTP2Ciphers(ciphers []string) bool {
 	var requiredHTTP2Ciphers = []string{
 		"ECDHE-RSA-AES128-GCM-SHA256",
@@ -411,29 +398,6 @@ func hasRequiredHTTP2Ciphers(ciphers []string) bool {
 
 	// lo.Some returns true if at least 1 element of a subset is contained into a collection
 	return lo.Some[string](requiredHTTP2Ciphers, ciphers)
-}
-
-func (wh WebhookHandler) MutateTLSConfig(cfg *tls.Config) {
-	// This callback executes on each client call returning a new config to be used
-	// please be aware that the APIServer is using http keepalive so this is going to
-	// be executed only after a while for fresh connections and not on existing ones
-	cfg.GetConfigForClient = func(_ *tls.ClientHelloInfo) (*tls.Config, error) {
-		cipherNames, minTypedTLSVersion := wh.selectCipherSuitesAndMinTLSVersion()
-		cfg.CipherSuites = crypto.CipherSuitesOrDie(crypto.OpenSSLToIANACipherSuites(cipherNames))
-		cfg.MinVersion = crypto.TLSVersionOrDie(string(minTypedTLSVersion))
-		return cfg, nil
-	}
-}
-
-func (wh WebhookHandler) selectCipherSuitesAndMinTLSVersion() ([]string, openshiftconfigv1.TLSProtocolVersion) {
-	ci := hcoutil.GetClusterInfo()
-	profile := ci.GetTLSSecurityProfile(hcoTlsConfigCache)
-
-	if profile.Custom != nil {
-		return profile.Custom.TLSProfileSpec.Ciphers, profile.Custom.TLSProfileSpec.MinTLSVersion
-	}
-
-	return openshiftconfigv1.TLSProfiles[profile.Type].Ciphers, openshiftconfigv1.TLSProfiles[profile.Type].MinTLSVersion
 }
 
 // validationResponseFromStatus returns a response for admitting a request with provided Status object.
@@ -445,4 +409,15 @@ func validationResponseFromStatus(allowed bool, status metav1.Status) admission.
 		},
 	}
 	return resp
+}
+
+func SelectCipherSuitesAndMinTLSVersion() ([]string, openshiftconfigv1.TLSProtocolVersion) {
+	ci := hcoutil.GetClusterInfo()
+	profile := ci.GetTLSSecurityProfile(hcoTLSConfigCache)
+
+	if profile.Custom != nil {
+		return profile.Custom.TLSProfileSpec.Ciphers, profile.Custom.TLSProfileSpec.MinTLSVersion
+	}
+
+	return openshiftconfigv1.TLSProfiles[profile.Type].Ciphers, openshiftconfigv1.TLSProfiles[profile.Type].MinTLSVersion
 }

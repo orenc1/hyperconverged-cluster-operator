@@ -22,7 +22,8 @@ const (
 	VirtShareDir                              = "/var/run/kubevirt"
 	VirtPrivateDir                            = "/var/run/kubevirt-private"
 	VirtLibDir                                = "/var/lib/kubevirt"
-	KubeletPodsDir                            = "/var/lib/kubelet/pods"
+	KubeletRoot                               = "/var/lib/kubelet"
+	KubeletPodsDir                            = KubeletRoot + "/pods"
 	HostRootMount                             = "/proc/1/root/"
 	CPUManagerOS3Path                         = HostRootMount + "var/lib/origin/openshift.local.volumes/cpu_manager_state"
 	CPUManagerPath                            = HostRootMount + "var/lib/kubelet/cpu_manager_state"
@@ -102,6 +103,14 @@ func IsPasstVMI(vmi *v1.VirtualMachineInstance) bool {
 // Check if a VMI spec requests AMD SEV
 func IsSEVVMI(vmi *v1.VirtualMachineInstance) bool {
 	return vmi.Spec.Domain.LaunchSecurity != nil && vmi.Spec.Domain.LaunchSecurity.SEV != nil
+}
+
+// Check if a VMI spec requests AMD SEV-ES
+func IsSEVESVMI(vmi *v1.VirtualMachineInstance) bool {
+	return IsSEVVMI(vmi) &&
+		vmi.Spec.Domain.LaunchSecurity.SEV.Policy != nil &&
+		vmi.Spec.Domain.LaunchSecurity.SEV.Policy.EncryptedState != nil &&
+		*vmi.Spec.Domain.LaunchSecurity.SEV.Policy.EncryptedState == true
 }
 
 func IsVmiUsingHyperVReenlightenment(vmi *v1.VirtualMachineInstance) bool {
@@ -215,22 +224,21 @@ func MarkAsNonroot(vmi *v1.VirtualMachineInstance) {
 	vmi.Status.RuntimeUser = 107
 }
 
-func SetDefaultVolumeDisk(obj *v1.VirtualMachineInstance) {
-
+func SetDefaultVolumeDisk(spec *v1.VirtualMachineInstanceSpec) {
 	diskAndFilesystemNames := make(map[string]struct{})
 
-	for _, disk := range obj.Spec.Domain.Devices.Disks {
+	for _, disk := range spec.Domain.Devices.Disks {
 		diskAndFilesystemNames[disk.Name] = struct{}{}
 	}
 
-	for _, fs := range obj.Spec.Domain.Devices.Filesystems {
+	for _, fs := range spec.Domain.Devices.Filesystems {
 		diskAndFilesystemNames[fs.Name] = struct{}{}
 	}
 
-	for _, volume := range obj.Spec.Volumes {
+	for _, volume := range spec.Volumes {
 		if _, foundDisk := diskAndFilesystemNames[volume.Name]; !foundDisk {
-			obj.Spec.Domain.Devices.Disks = append(
-				obj.Spec.Domain.Devices.Disks,
+			spec.Domain.Devices.Disks = append(
+				spec.Domain.Devices.Disks,
 				v1.Disk{
 					Name: volume.Name,
 				},

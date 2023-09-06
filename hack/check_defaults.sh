@@ -22,8 +22,8 @@ echo "Read the CR's spec before starting the test"
 ${KUBECTL_BINARY} get hco -n "${INSTALLED_NAMESPACE}" kubevirt-hyperconverged -o json | jq '.spec'
 
 CERTCONFIGDEFAULTS='{"ca":{"duration":"48h0m0s","renewBefore":"24h0m0s"},"server":{"duration":"24h0m0s","renewBefore":"12h0m0s"}}'
-FGDEFAULTS='{"deployTektonTaskResources":false,"enableCommonBootImageImport":true,"nonRoot":true,"withHostPassthroughCPU":false}'
-LMDEFAULTS='{"completionTimeoutPerGiB":800,"parallelMigrationsPerCluster":5,"parallelOutboundMigrationsPerNode":2,"progressTimeout":150}'
+FGDEFAULTS='{"deployKubeSecondaryDNS":false,"deployTektonTaskResources":false,"disableMDevConfiguration":false,"enableCommonBootImageImport":true,"persistentReservation":false,"nonRoot":true,"withHostPassthroughCPU":false}'
+LMDEFAULTS='{"allowAutoConverge":false,"allowPostCopy":false,"completionTimeoutPerGiB":800,"parallelMigrationsPerCluster":5,"parallelOutboundMigrationsPerNode":2,"progressTimeout":150}'
 PERMITTED_HOST_DEVICES_DEFAULT1='{"pciDeviceSelector":"10DE:1DB6","resourceName":"nvidia.com/GV100GL_Tesla_V100"}'
 PERMITTED_HOST_DEVICES_DEFAULT2='{"pciDeviceSelector":"10DE:1EB8","resourceName":"nvidia.com/TU104GL_Tesla_T4"}'
 WORKLOAD_UPDATE_STRATEGY_DEFAULT='{"batchEvictionInterval":"1m0s","batchEvictionSize":10,"workloadUpdateMethods":["LiveMigrate"]}'
@@ -41,8 +41,10 @@ CERTCONFIGPATHS=(
 )
 
 FGPATHS=(
+    "/spec/featureGates/disableMDevConfiguration"
     "/spec/featureGates/enableCommonBootImageImport"
     "/spec/featureGates/withHostPassthroughCPU"
+    "/spec/featureGates/nonRoot"
     "/spec/featureGates"
     "/spec"
 )
@@ -50,9 +52,10 @@ FGPATHS=(
 LMPATHS=(
     "/spec/liveMigrationConfig/parallelMigrationsPerCluster"
     "/spec/liveMigrationConfig/parallelOutboundMigrationsPerNode"
-    "/spec/liveMigrationConfig/bandwidthPerMigration"
     "/spec/liveMigrationConfig/completionTimeoutPerGiB"
     "/spec/liveMigrationConfig/progressTimeout"
+    "/spec/liveMigrationConfig/allowAutoConverge"
+    "/spec/liveMigrationConfig/allowPostCopy"
     "/spec/liveMigrationConfig"
     "/spec"
 )
@@ -96,7 +99,7 @@ for JPATH in "${FGPATHS[@]}"; do
     sleep 2
 done
 
-echo "Check that featureGates defaults are behaving as expected"
+echo "Check that liveMigrationConfig defaults are behaving as expected"
 
 ./hack/retry.sh 10 3 "${KUBECTL_BINARY} patch hco -n \"${INSTALLED_NAMESPACE}\" --type=json kubevirt-hyperconverged -p '[{ \"op\": \"replace\", \"path\": /spec, \"value\": {} }]'"
 for JPATH in "${LMPATHS[@]}"; do
@@ -134,3 +137,4 @@ for JPATH in "${UNINSTALL_STRATEGY_PATHS[@]}"; do
     fi
     sleep 2
 done
+

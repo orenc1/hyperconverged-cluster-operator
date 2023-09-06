@@ -7,30 +7,71 @@ metadata:
   name: cluster-network-addons-operator
 rules:
 - apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  verbs:
+  - get
+  - create
+  - update
+  - delete
+- apiGroups:
   - ""
   resources:
-  - pods
   - configmaps
   verbs:
   - get
-  - list
-  - watch
   - create
-  - patch
   - update
-  - delete
 - apiGroups:
   - apps
   resources:
   - deployments
-  - replicasets
+  verbs:
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - update
+  - get
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
   verbs:
   - get
-  - list
-  - watch
   - create
-  - patch
   - update
+  - delete
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - prometheusrules
+  - servicemonitors
+  verbs:
+  - get
+  - create
+  - update
+  - delete
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - get
+  - create
+  - update
+  - delete
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - get
   - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -42,6 +83,15 @@ metadata:
 rules:
 - apiGroups:
   - ""
+  resourceNames:
+  - kubevirt-ca
+  - kubevirt-export-ca
+  - kubevirt-virt-handler-certs
+  - kubevirt-virt-handler-server-certs
+  - kubevirt-operator-certs
+  - kubevirt-virt-api-certs
+  - kubevirt-controller-certs
+  - kubevirt-exportproxy-certs
   resources:
   - secrets
   verbs:
@@ -86,45 +136,6 @@ metadata:
   labels:
     name: ssp-operator
   name: ssp-operator
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - configmaps
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
-- apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
-- apiGroups:
-  - ""
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  labels:
-    name: tekton-tasks-operator
-  name: tekton-tasks-operator
 rules:
 - apiGroups:
   - ""
@@ -399,6 +410,50 @@ rules:
   - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    name: mtq-operator
+  name: mtq-operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  - configmaps
+  - events
+  - secrets
+  - services
+  verbs:
+  - '*'
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - deployments/finalizers
+  verbs:
+  - '*'
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  - prometheusrules
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+  - update
+  - patch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - '*'
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
@@ -462,10 +517,10 @@ rules:
   - update
   - delete
 - apiGroups:
-  - tektontasks.kubevirt.io
+  - networkaddonsoperator.network.kubevirt.io
   resources:
-  - tektontasks
-  - tektontasks/finalizers
+  - networkaddonsconfigs
+  - networkaddonsconfigs/finalizers
   verbs:
   - get
   - list
@@ -474,10 +529,10 @@ rules:
   - update
   - delete
 - apiGroups:
-  - networkaddonsoperator.network.kubevirt.io
+  - mtq.kubevirt.io
   resources:
-  - networkaddonsconfigs
-  - networkaddonsconfigs/finalizers
+  - mtqs
+  - mtqs/finalizers
   verbs:
   - get
   - list
@@ -614,6 +669,8 @@ rules:
   - get
   - list
   - watch
+  - update
+  - patch
 - apiGroups:
   - scheduling.k8s.io
   resources:
@@ -651,6 +708,7 @@ rules:
   - clusterversions
   - infrastructures
   - ingresses
+  - networks
   verbs:
   - get
   - list
@@ -662,6 +720,12 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - config.openshift.io
+  resources:
+  - dnses
+  verbs:
+  - get
 - apiGroups:
   - coordination.k8s.io
   resources:
@@ -734,34 +798,226 @@ metadata:
   name: cluster-network-addons-operator
 rules:
 - apiGroups:
+  - operator.openshift.io
+  resources:
+  - networks
+  verbs:
+  - list
+  - watch
+- apiGroups:
   - security.openshift.io
-  resourceNames:
-  - privileged
   resources:
   - securitycontextconstraints
   verbs:
   - get
   - list
-  - watch
-  - use
+  - create
+  - update
 - apiGroups:
-  - operator.openshift.io
+  - apiextensions.k8s.io
   resources:
-  - networks
+  - customresourcedefinitions
   verbs:
   - get
-  - list
-  - watch
+  - create
+  - update
 - apiGroups:
   - networkaddonsoperator.network.kubevirt.io
   resources:
   - networkaddonsconfigs
   verbs:
+  - list
+  - watch
+- apiGroups:
+  - networkaddonsoperator.network.kubevirt.io
+  resources:
+  - networkaddonsconfigs/status
+  verbs:
+  - patch
+- apiGroups:
+  - networkaddonsoperator.network.kubevirt.io
+  resources:
+  - networkaddonsconfigs/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - daemonsets
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - namespaces
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  verbs:
+  - get
+  - create
+  - update
+  - bind
+  - delete
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  verbs:
+  - get
+  - create
+  - update
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - get
+  - create
+  - update
+  - delete
+- apiGroups:
+  - config.openshift.io
+  resources:
+  - infrastructures
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - pods/status
+  verbs:
+  - get
+  - update
+  - list
+  - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - nodes/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - list
+  - watch
+  - create
+  - update
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - validatingwebhookconfigurations
+  - mutatingwebhookconfigurations
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - get
+  - create
+  - update
+  - list
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachines
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - create
+  - update
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - '*'
+  - ""
+  resources:
+  - endpoints
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - k8s.cni.cncf.io
   resources:
   - '*'
   verbs:
@@ -799,6 +1055,18 @@ rules:
   - create
   - update
   - delete
+  - patch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - delete
+  - update
+  - create
   - patch
 - apiGroups:
   - ""
@@ -1055,6 +1323,7 @@ rules:
   - cdi.kubevirt.io
   resources:
   - datasources
+  - datavolumes
   verbs:
   - get
   - list
@@ -1121,6 +1390,18 @@ rules:
   - configmaps
   - endpoints
   - services
+  verbs:
+  - get
+  - list
+  - watch
+  - delete
+  - update
+  - create
+  - patch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
   verbs:
   - get
   - list
@@ -1217,6 +1498,8 @@ rules:
   resources:
   - virtualmachinepools
   - virtualmachinepools/finalizers
+  - virtualmachinepools/status
+  - virtualmachinepools/scale
   verbs:
   - watch
   - list
@@ -1334,6 +1617,13 @@ rules:
   - namespaces
   verbs:
   - get
+- apiGroups:
+  - ""
+  resources:
+  - resourcequotas
+  verbs:
+  - list
+  - watch
 - apiGroups:
   - route.openshift.io
   resources:
@@ -1461,6 +1751,7 @@ rules:
   - virtualmachineinstances/console
   - virtualmachineinstances/vnc
   - virtualmachineinstances/vnc/screenshot
+  - virtualmachineinstances/portforward
   - virtualmachineinstances/guestosinfo
   - virtualmachineinstances/filesystemlist
   - virtualmachineinstances/userlist
@@ -1476,13 +1767,13 @@ rules:
   - virtualmachineinstances/freeze
   - virtualmachineinstances/unfreeze
   - virtualmachineinstances/softreboot
-  - virtualmachineinstances/portforward
   verbs:
   - update
 - apiGroups:
   - subresources.kubevirt.io
   resources:
   - virtualmachines/expand-spec
+  - virtualmachines/portforward
   verbs:
   - get
 - apiGroups:
@@ -1495,6 +1786,7 @@ rules:
   - virtualmachines/removevolume
   - virtualmachines/migrate
   - virtualmachines/memorydump
+  - virtualmachines/addinterface
   verbs:
   - update
 - apiGroups:
@@ -1526,6 +1818,32 @@ rules:
   - virtualmachinesnapshots
   - virtualmachinesnapshotcontents
   - virtualmachinerestores
+  verbs:
+  - get
+  - delete
+  - create
+  - update
+  - patch
+  - list
+  - watch
+  - deletecollection
+- apiGroups:
+  - export.kubevirt.io
+  resources:
+  - virtualmachineexports
+  verbs:
+  - get
+  - delete
+  - create
+  - update
+  - patch
+  - list
+  - watch
+  - deletecollection
+- apiGroups:
+  - clone.kubevirt.io
+  resources:
+  - virtualmachineclones
   verbs:
   - get
   - delete
@@ -1578,6 +1896,7 @@ rules:
   - virtualmachineinstances/console
   - virtualmachineinstances/vnc
   - virtualmachineinstances/vnc/screenshot
+  - virtualmachineinstances/portforward
   - virtualmachineinstances/guestosinfo
   - virtualmachineinstances/filesystemlist
   - virtualmachineinstances/userlist
@@ -1593,13 +1912,13 @@ rules:
   - virtualmachineinstances/freeze
   - virtualmachineinstances/unfreeze
   - virtualmachineinstances/softreboot
-  - virtualmachineinstances/portforward
   verbs:
   - update
 - apiGroups:
   - subresources.kubevirt.io
   resources:
   - virtualmachines/expand-spec
+  - virtualmachines/portforward
   verbs:
   - get
 - apiGroups:
@@ -1612,6 +1931,7 @@ rules:
   - virtualmachines/removevolume
   - virtualmachines/migrate
   - virtualmachines/memorydump
+  - virtualmachines/addinterface
   verbs:
   - update
 - apiGroups:
@@ -1642,6 +1962,30 @@ rules:
   - virtualmachinesnapshots
   - virtualmachinesnapshotcontents
   - virtualmachinerestores
+  verbs:
+  - get
+  - delete
+  - create
+  - update
+  - patch
+  - list
+  - watch
+- apiGroups:
+  - export.kubevirt.io
+  resources:
+  - virtualmachineexports
+  verbs:
+  - get
+  - delete
+  - create
+  - update
+  - patch
+  - list
+  - watch
+- apiGroups:
+  - clone.kubevirt.io
+  resources:
+  - virtualmachineclones
   verbs:
   - get
   - delete
@@ -1730,6 +2074,22 @@ rules:
   - list
   - watch
 - apiGroups:
+  - export.kubevirt.io
+  resources:
+  - virtualmachineexports
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - clone.kubevirt.io
+  resources:
+  - virtualmachineclones
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - instancetype.kubevirt.io
   resources:
   - virtualmachineinstancetypes
@@ -1797,6 +2157,33 @@ rules:
   - update
   - watch
 - apiGroups:
+  - '*'
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - delete
+  - list
+  - watch
+- apiGroups:
+  - '*'
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - '*'
+- apiGroups:
+  - '*'
+  resources:
+  - pods
+  verbs:
+  - create
+- apiGroups:
+  - '*'
+  resources:
+  - secrets
+  verbs:
+  - '*'
+- apiGroups:
   - admissionregistration.k8s.io
   resources:
   - validatingwebhookconfigurations
@@ -1817,9 +2204,9 @@ rules:
   - list
   - watch
 - apiGroups:
-  - apps
+  - apiregistration.k8s.io
   resources:
-  - daemonsets
+  - apiservices
   verbs:
   - create
   - delete
@@ -1840,6 +2227,18 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
 - apiGroups:
   - cdi.kubevirt.io
   resources:
@@ -1869,6 +2268,7 @@ rules:
   resources:
   - datavolumes
   verbs:
+  - '*'
   - create
   - delete
   - get
@@ -1896,6 +2296,7 @@ rules:
   resources:
   - configmaps
   - serviceaccounts
+  - services
   verbs:
   - create
   - delete
@@ -1919,14 +2320,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - nodes
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - ""
-  resources:
   - persistentvolumeclaims
   verbs:
   - create
@@ -1947,6 +2340,34 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - serviceaccounts
   - services
   verbs:
@@ -1958,6 +2379,48 @@ rules:
   - update
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
+- apiGroups:
+  - instancetype.kubevirt.io
+  resources:
+  - virtualmachineclusterinstancetypes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - instancetype.kubevirt.io
+  resources:
+  - virtualmachineclusterpreferences
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  - virtualmachines
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
   - kubevirt.io
   resources:
   - virtualmachines
@@ -1965,6 +2428,12 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachines/finalizers
+  verbs:
+  - '*'
 - apiGroups:
   - monitoring.coreos.com
   resources:
@@ -1995,7 +2464,59 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
+  - clusterrolebindings
   - clusterroles
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - rolebindings
   - roles
   verbs:
@@ -2021,25 +2542,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - security.openshift.io
+  - route.openshift.io
   resources:
-  - securitycontextconstraints
+  - routes
   verbs:
-  - create
   - delete
-  - get
   - list
-  - patch
-  - update
   - watch
-- apiGroups:
-  - security.openshift.io
-  resourceNames:
-  - privileged
-  resources:
-  - securitycontextconstraints
-  verbs:
-  - use
 - apiGroups:
   - ssp.kubevirt.io
   resources:
@@ -2056,18 +2565,6 @@ rules:
   - ssp.kubevirt.io
   resources:
   - kubevirtmetricsaggregations
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ssp.kubevirt.io
-  resources:
-  - kubevirtnodelabellerbundles
   verbs:
   - create
   - delete
@@ -2115,135 +2612,11 @@ rules:
   - patch
   - update
 - apiGroups:
-  - template.openshift.io
+  - subresources.kubevirt.io
   resources:
-  - templates
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    name: tekton-tasks-operator
-  name: tekton-tasks-operator
-rules:
-- apiGroups:
-  - '*'
-  resources:
-  - configmaps
-  verbs:
-  - create
-  - delete
-  - list
-  - watch
-- apiGroups:
-  - '*'
-  resources:
-  - persistentvolumeclaims
-  verbs:
-  - '*'
-- apiGroups:
-  - '*'
-  resources:
-  - pods
-  verbs:
-  - create
-- apiGroups:
-  - '*'
-  resources:
-  - secrets
-  verbs:
-  - '*'
-- apiGroups:
-  - apiextensions.k8s.io
-  resources:
-  - customresourcedefinitions
+  - virtualmachineinstances/vnc
   verbs:
   - get
-  - list
-  - watch
-- apiGroups:
-  - cdi.kubevirt.io
-  resources:
-  - datasources
-  verbs:
-  - create
-  - delete
-  - get
-- apiGroups:
-  - cdi.kubevirt.io
-  resources:
-  - datavolumes
-  verbs:
-  - '*'
-- apiGroups:
-  - config.openshift.io
-  resources:
-  - clusterversions
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - serviceaccounts
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - kubevirt.io
-  resources:
-  - virtualmachineinstances
-  - virtualmachines
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - update
-  - watch
-- apiGroups:
-  - kubevirt.io
-  resources:
-  - virtualmachines/finalizers
-  verbs:
-  - '*'
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - clusterroles
-  - rolebindings
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - rolebindings
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - subresources.kubevirt.io
   resources:
@@ -2256,14 +2629,13 @@ rules:
   - tekton.dev
   resources:
   - clustertasks
+  - tasks
   verbs:
-  - create
   - delete
   - get
   - list
   - patch
   - update
-  - watch
 - apiGroups:
   - tekton.dev
   resources:
@@ -2277,9 +2649,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - tektontasks.kubevirt.io
+  - tekton.dev
   resources:
-  - tektontasks
+  - tasks
   verbs:
   - create
   - delete
@@ -2288,20 +2660,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - tektontasks.kubevirt.io
-  resources:
-  - tektontasks/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - tektontasks.kubevirt.io
-  resources:
-  - tektontasks/status
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - template.openshift.io
   resources:
@@ -2359,6 +2717,7 @@ rules:
   - apiextensions.k8s.io
   resources:
   - customresourcedefinitions
+  - customresourcedefinitions/status
   verbs:
   - '*'
 - apiGroups:
@@ -2408,6 +2767,12 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  verbs:
+  - get
+- apiGroups:
   - cdi.kubevirt.io
   resources:
   - datavolumes
@@ -2445,7 +2810,6 @@ rules:
   resources:
   - persistentvolumes
   - persistentvolumeclaims
-  - volumesnapshots
   verbs:
   - get
   - list
@@ -2454,12 +2818,12 @@ rules:
   - update
   - delete
   - deletecollection
+  - patch
 - apiGroups:
   - ""
   resources:
   - persistentvolumeclaims/finalizers
   - pods/finalizers
-  - volumesnapshots/finalizers
   verbs:
   - update
 - apiGroups:
@@ -2479,6 +2843,7 @@ rules:
   - configmaps
   verbs:
   - get
+  - create
 - apiGroups:
   - storage.k8s.io
   resources:
@@ -2784,5 +3149,141 @@ rules:
   - pods
   verbs:
   - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    name: mtq-operator
+  name: mtq-operator
+rules:
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - '*'
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  verbs:
+  - '*'
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+  - delete
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  - customresourcedefinitions/status
+  verbs:
+  - '*'
+- apiGroups:
+  - mtq.kubevirt.io
+  resources:
+  - '*'
+  verbs:
+  - '*'
+- apiGroups:
+  - scheduling.k8s.io
+  resources:
+  - priorityclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - list
+  - watch
+  - get
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - list
+  - watch
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - resourcequotas
+  verbs:
+  - list
+  - watch
+  - update
+- apiGroups:
+  - mtq.kubevirt.io
+  resources:
+  - virtualmachinemigrationresourcequotas
+  verbs:
+  - get
+  - update
+  - watch
+  - list
+- apiGroups:
+  - mtq.kubevirt.io
+  resources:
+  - virtualmachinemigrationresourcequotas/status
+  verbs:
+  - update
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - kubevirts
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  - virtualmachineinstancemigrations
+  verbs:
+  - watch
+  - list
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - validatingwebhookconfigurations
+  verbs:
+  - create
+  - get
+  - delete
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - kubevirts
+  verbs:
   - list
   - watch

@@ -1,4 +1,6 @@
 - metadata:
+    annotations:
+      cdi.kubevirt.io/storage.bind.immediate.requested: "true"
     name: fedora-image-cron
     namespace: golden-image-namespace
   spec:
@@ -10,6 +12,8 @@
             url: docker://quay.io/kubevirt/fedora
     managedDataSource: fedora
 - metadata:
+    annotations:
+      cdi.kubevirt.io/storage.bind.immediate.requested: "true"
     name: centos8-image-cron
     namespace: golden-image-namespace
   spec:

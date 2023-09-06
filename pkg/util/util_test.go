@@ -49,34 +49,6 @@ var _ = Describe("Test general utilities", func() {
 		})
 	})
 
-	Context("test GetWatchNamespace", func() {
-		var origVal string
-		BeforeEach(func() {
-			origVal = os.Getenv(WatchNamespaceEnvVar)
-		})
-
-		AfterEach(func() {
-			_ = os.Setenv(WatchNamespaceEnvVar, origVal)
-		})
-
-		It("should return the namespace from the WATCH_NAMESPACE env var", func() {
-
-			const expectedNs = "mynamespace"
-			_ = os.Setenv(WatchNamespaceEnvVar, expectedNs)
-
-			ns, err := GetWatchNamespace()
-			Expect(err).ShouldNot(HaveOccurred())
-			Expect(ns).Should(Equal(expectedNs))
-		})
-
-		It("should return an error if the WATCH_NAMESPACE env var is not set", func() {
-			_ = os.Unsetenv(WatchNamespaceEnvVar)
-
-			_, err := GetWatchNamespace()
-			Expect(err).Should(HaveOccurred())
-		})
-	})
-
 	Context("test EnsureDeleted", func() {
 
 		const appName = "appName"
@@ -92,14 +64,15 @@ var _ = Describe("Test general utilities", func() {
 		}
 
 		testScheme := scheme.Scheme
-		Expect(openshiftconfigv1.Install(testScheme)).ToNot(HaveOccurred())
+		Expect(openshiftconfigv1.Install(testScheme)).To(Succeed())
 
 		ctx := context.Background()
 
 		It("should delete an existing resource", func() {
 			cl := fake.NewClientBuilder().
 				WithScheme(testScheme).
-				WithRuntimeObjects(pod).
+				WithObjects(pod).
+				WithStatusSubresource(pod).
 				Build()
 
 			deleted, err := EnsureDeleted(ctx, cl, pod, appName, logger, false, true, true)
@@ -107,8 +80,7 @@ var _ = Describe("Test general utilities", func() {
 			Expect(deleted).To(BeTrue())
 
 			podToSearch := &corev1.Pod{}
-			err = cl.Get(ctx, client.ObjectKeyFromObject(pod), podToSearch)
-			Expect(err).Should(HaveOccurred())
+			Expect(cl.Get(ctx, client.ObjectKeyFromObject(pod), podToSearch)).ShouldNot(Succeed())
 		})
 
 		It("should not return error if the resource does not exist", func() {
@@ -121,8 +93,7 @@ var _ = Describe("Test general utilities", func() {
 			Expect(deleted).To(BeFalse())
 
 			podToSearch := &corev1.Pod{}
-			err = cl.Get(ctx, client.ObjectKeyFromObject(pod), podToSearch)
-			Expect(err).Should(HaveOccurred())
+			Expect(cl.Get(ctx, client.ObjectKeyFromObject(pod), podToSearch)).ShouldNot(Succeed())
 		})
 	})
 

@@ -28,7 +28,7 @@ fi
 source ./hack/check_operator_condition.sh
 printOperatorCondition
 
-${TEST_OUT_PATH}/func-tests.test -ginkgo.v -junit-output="${TEST_OUT_PATH}/output/junit.xml" -installed-namespace="${INSTALLED_NAMESPACE}" -cdi-namespace="${INSTALLED_NAMESPACE}" "$@" "${KUBECONFIG_FLAG}"
+${TEST_OUT_PATH}/func-tests.test -ginkgo.v -ginkgo.junit-report="${TEST_OUT_PATH}/output/junit.xml" -installed-namespace="${INSTALLED_NAMESPACE}" -cdi-namespace="${INSTALLED_NAMESPACE}" "$@" "${KUBECONFIG_FLAG}"
 
 # wait a minute to allow all VMs to be deleted before attempting to change node placement configuration
 sleep 60
@@ -42,14 +42,6 @@ ${KUBECTL_BINARY} get hco -n "${INSTALLED_NAMESPACE}" kubevirt-hyperconverged -o
 # wait a bit to make sure the VMs are deleted
 sleep 60
 
-./hack/retry.sh 10 30 "KUBECTL_BINARY=${KUBECTL_BINARY} ./hack/check_labels.sh"
-
-# Check the defaulting mechanism
-KUBECTL_BINARY=${KUBECTL_BINARY} ./hack/check_defaults.sh
-
-# Check golden images
-KUBECTL_BINARY=${KUBECTL_BINARY} ./hack/check_golden_images.sh
-
 # Check TLS profile on the webhook
 KUBECTL_BINARY=${KUBECTL_BINARY} ./hack/check_tlsprofile.sh
 
@@ -57,8 +49,3 @@ KUBECTL_BINARY=${KUBECTL_BINARY} ./hack/check_tlsprofile.sh
 ${KUBECTL_BINARY} label priorityclass kubevirt-cluster-critical app-
 sleep 10
 [[ $(${KUBECTL_BINARY} get priorityclass kubevirt-cluster-critical -o=jsonpath='{.metadata.labels.app}') == 'kubevirt-hyperconverged' ]]
-
-./hack/check_update_priority_class.sh
-
-# Check the webhook, to see if it allow deleting of the HyperConverged CR
-./hack/retry.sh 10 30 "${KUBECTL_BINARY} delete hco -n ${INSTALLED_NAMESPACE} kubevirt-hyperconverged"

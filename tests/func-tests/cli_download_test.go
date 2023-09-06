@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"net/http"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -56,27 +57,29 @@ func checkConsoleCliDownloadSpec(client kubecli.KubevirtClient) {
 	s.AddKnownTypes(consolev1.GroupVersion)
 
 	var ccd consolev1.ConsoleCLIDownload
-	err := client.RestClient().Get().
+	ExpectWithOffset(1, client.RestClient().Get().
 		Resource("consoleclidownloads").
 		Name("virtctl-clidownloads-kubevirt-hyperconverged").
 		AbsPath("/apis", consolev1.GroupVersion.Group, consolev1.GroupVersion.Version).
-		Timeout(10 * time.Second).
-		Do(context.TODO()).Into(&ccd)
+		Timeout(10*time.Second).
+		Do(context.TODO()).Into(&ccd)).To(Succeed())
 
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	ExpectWithOffset(1, ccd.Spec.Links).Should(HaveLen(3))
+	ExpectWithOffset(1, ccd.Spec.Links).Should(HaveLen(6))
 
 	for _, link := range ccd.Spec.Links {
-		By("Checking links. Link:" + link.Href)
-		client := &http.Client{Transport: &http.Transport{
-			// ssl of the route is irrelevant
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}}
-		resp, err := client.Get(link.Href)
-		_ = resp.Body.Close()
+		// virtctl for Windows for ARM 64 is still not shipped, avoid checking it
+		// TODO: remove this once ready
+		if !(strings.Contains(link.Href, "windows") && strings.Contains(link.Href, "arm64")) {
+			By("Checking links. Link:" + link.Href)
+			client := &http.Client{Transport: &http.Transport{
+				// ssl of the route is irrelevant
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			}}
+			resp, err := client.Get(link.Href)
+			_ = resp.Body.Close()
 
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
-		ExpectWithOffset(1, resp).Should(HaveHTTPStatus(http.StatusOK))
-
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			ExpectWithOffset(1, resp).Should(HaveHTTPStatus(http.StatusOK))
+		}
 	}
 }

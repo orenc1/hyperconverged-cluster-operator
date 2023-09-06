@@ -16,6 +16,7 @@ type NetworkAddonsConfigSpec struct {
 	KubeMacPool            *KubeMacPool              `json:"kubeMacPool,omitempty"`
 	ImagePullPolicy        corev1.PullPolicy         `json:"imagePullPolicy,omitempty"`
 	NMState                *NMState                  `json:"nmstate,omitempty"`
+	KubeSecondaryDNS       *KubeSecondaryDNS         `json:"kubeSecondaryDNS,omitempty"`
 	MacvtapCni             *MacvtapCni               `json:"macvtap,omitempty"`
 	SelfSignConfiguration  *SelfSignConfiguration    `json:"selfSignConfiguration,omitempty"`
 	PlacementConfiguration *PlacementConfiguration   `json:"placementConfiguration,omitempty"`
@@ -63,6 +64,14 @@ type Ovs struct{}
 // NMState is a declarative node network configuration driven through Kubernetes API
 type NMState struct{}
 
+// KubeSecondaryDNS plugin allows to support FQDN for VMI's secondary networks
+type KubeSecondaryDNS struct {
+	// Domain defines the FQDN domain
+	Domain string `json:"domain,omitempty"`
+	// NameServerIp defines the name server IP
+	NameServerIP string `json:"nameServerIP,omitempty"`
+}
+
 // KubeMacPool plugin manages MAC allocation to Pods and VMs in Kubernetes
 type KubeMacPool struct {
 	// RangeStart defines the first mac in range
@@ -72,7 +81,11 @@ type KubeMacPool struct {
 }
 
 // MacvtapCni plugin allows users to define Kubernetes networks on top of existing host interfaces
-type MacvtapCni struct{}
+type MacvtapCni struct {
+	// DevicePluginConfig allows the user to override the name of the
+	// `ConfigMap` where the device plugin configuration is held.
+	DevicePluginConfig string `json:"devicePluginConfig,omitempty"`
+}
 
 // NetworkAddonsConfigStatus defines the observed state of NetworkAddonsConfig
 type NetworkAddonsConfigStatus struct {

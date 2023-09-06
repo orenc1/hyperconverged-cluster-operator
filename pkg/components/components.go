@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"time"
 
+	"k8s.io/utils/ptr"
+
 	"github.com/blang/semver/v4"
 	csvVersion "github.com/operator-framework/api/pkg/lib/version"
 	csvv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
@@ -18,9 +20,9 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
 	crdgen "sigs.k8s.io/controller-tools/pkg/crd"
 	crdmarkers "sigs.k8s.io/controller-tools/pkg/crd/markers"
 	"sigs.k8s.io/controller-tools/pkg/loader"
@@ -29,9 +31,9 @@ import (
 	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/api/v1beta1"
 	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
 	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
-
-	"k8s.io/apimachinery/pkg/runtime"
 )
+
+const DisableOperandDeletionAnnotation = "console.openshift.io/disable-operand-delete"
 
 const (
 	crName              = util.HyperConvergedName
@@ -57,7 +59,8 @@ type DeploymentOperatorParams struct {
 	Image               string
 	WebhookImage        string
 	CliDownloadsImage   string
-	KvUiPluginImage     string
+	KVUIPluginImage     string
+	KVUIProxyImage      string
 	ImagePullPolicy     string
 	ConversionContainer string
 	VmwareContainer     string
@@ -69,8 +72,8 @@ type DeploymentOperatorParams struct {
 	CdiVersion          string
 	CnaoVersion         string
 	SspVersion          string
-	TtoVersion          string
 	HppoVersion         string
+	MtqVersion          string
 	Env                 []corev1.EnvVar
 }
 
@@ -204,10 +207,6 @@ func GetDeploymentSpecOperator(params *DeploymentOperatorParams) appsv1.Deployme
 								},
 							},
 							{
-								Name:  "WATCH_NAMESPACE",
-								Value: "",
-							},
-							{
 								Name:  "VIRTIOWIN_CONTAINER",
 								Value: params.VirtIOWinContainer,
 							},
@@ -240,16 +239,20 @@ func GetDeploymentSpecOperator(params *DeploymentOperatorParams) appsv1.Deployme
 								Value: params.SspVersion,
 							},
 							{
-								Name:  util.TtoVersionEnvV,
-								Value: params.TtoVersion,
-							},
-							{
 								Name:  util.HppoVersionEnvV,
 								Value: params.HppoVersion,
 							},
 							{
-								Name:  util.KvUiPluginImageEnvV,
-								Value: params.KvUiPluginImage,
+								Name:  util.MtqVersionEnvV,
+								Value: params.MtqVersion,
+							},
+							{
+								Name:  util.KVUIPluginImageEnvV,
+								Value: params.KVUIPluginImage,
+							},
+							{
+								Name:  util.KVUIProxyImageEnvV,
+								Value: params.KVUIProxyImage,
 							},
 						}, params.Env...),
 						Resources: v1.ResourceRequirements{
@@ -321,7 +324,7 @@ func getLabels(name, hcoKvIoVersion string) map[string]string {
 
 func GetStdPodSecurityContext() *v1.PodSecurityContext {
 	return &v1.PodSecurityContext{
-		RunAsNonRoot: pointer.Bool(true),
+		RunAsNonRoot: ptr.To(true),
 		SeccompProfile: &v1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
@@ -330,7 +333,7 @@ func GetStdPodSecurityContext() *v1.PodSecurityContext {
 
 func GetStdContainerSecurityContext() *v1.SecurityContext {
 	return &v1.SecurityContext{
-		AllowPrivilegeEscalation: pointer.Bool(false),
+		AllowPrivilegeEscalation: ptr.To(false),
 		Capabilities: &v1.Capabilities{
 			Drop: []v1.Capability{"ALL"},
 		},
@@ -405,10 +408,6 @@ func GetDeploymentSpecWebhook(namespace, image, imagePullPolicy, hcoKvIoVersion 
 									},
 								},
 							},
-							{
-								Name:  "WATCH_NAMESPACE",
-								Value: "",
-							},
 						}, env...),
 						Resources: v1.ResourceRequirements{
 							Requests: map[v1.ResourceName]resource.Quantity{
@@ -446,7 +445,7 @@ var (
 )
 
 func GetClusterPermissions() []rbacv1.PolicyRule {
-
+	const configOpenshiftIO = "config.openshift.io"
 	return []rbacv1.PolicyRule{
 		{
 			APIGroups: stringListToSlice(util.APIVersionGroup),
@@ -461,8 +460,8 @@ func GetClusterPermissions() []rbacv1.PolicyRule {
 		roleWithAllPermissions("kubevirt.io", stringListToSlice("kubevirts", "kubevirts/finalizers")),
 		roleWithAllPermissions("cdi.kubevirt.io", stringListToSlice("cdis", "cdis/finalizers")),
 		roleWithAllPermissions("ssp.kubevirt.io", stringListToSlice("ssps", "ssps/finalizers")),
-		roleWithAllPermissions("tektontasks.kubevirt.io", stringListToSlice("tektontasks", "tektontasks/finalizers")),
 		roleWithAllPermissions("networkaddonsoperator.network.kubevirt.io", stringListToSlice("networkaddonsconfigs", "networkaddonsconfigs/finalizers")),
+		roleWithAllPermissions("mtq.kubevirt.io", stringListToSlice("mtqs", "mtqs/finalizers")),
 		roleWithAllPermissions("", stringListToSlice("configmaps")),
 		{
 			APIGroups: emptyAPIGroup,
@@ -510,7 +509,7 @@ func GetClusterPermissions() []rbacv1.PolicyRule {
 		{
 			APIGroups: stringListToSlice("operators.coreos.com"),
 			Resources: stringListToSlice("clusterserviceversions"),
-			Verbs:     stringListToSlice("get", "list", "watch"),
+			Verbs:     stringListToSlice("get", "list", "watch", "update", "patch"),
 		},
 		{
 			APIGroups: stringListToSlice("scheduling.k8s.io"),
@@ -524,14 +523,19 @@ func GetClusterPermissions() []rbacv1.PolicyRule {
 		},
 		roleWithAllPermissions("console.openshift.io", stringListToSlice("consoleclidownloads", "consolequickstarts")),
 		{
-			APIGroups: stringListToSlice("config.openshift.io"),
-			Resources: stringListToSlice("clusterversions", "infrastructures", "ingresses"),
+			APIGroups: stringListToSlice(configOpenshiftIO),
+			Resources: stringListToSlice("clusterversions", "infrastructures", "ingresses", "networks"),
 			Verbs:     stringListToSlice("get", "list"),
 		},
 		{
-			APIGroups: stringListToSlice("config.openshift.io"),
+			APIGroups: stringListToSlice(configOpenshiftIO),
 			Resources: stringListToSlice("apiservers"),
 			Verbs:     stringListToSlice("get", "list", "watch"),
+		},
+		{
+			APIGroups: stringListToSlice(configOpenshiftIO),
+			Resources: stringListToSlice("dnses"),
+			Verbs:     stringListToSlice("get"),
 		},
 		roleWithAllPermissions("coordination.k8s.io", stringListToSlice("leases")),
 		roleWithAllPermissions("route.openshift.io", stringListToSlice("routes")),
@@ -777,9 +781,8 @@ func GetCSVBase(params *CSVBaseParams) *csvv1alpha1.ClusterServiceVersion {
 	}
 
 	mutatingWebhookSideEffects := admissionregistrationv1.SideEffectClassNoneOnDryRun
-	mutatingWebhookPath := util.HCONSWebhookPath
 
-	mutatingWebhook := csvv1alpha1.WebhookDescription{
+	mutatingNamespaceWebhook := csvv1alpha1.WebhookDescription{
 		GenerateName:            util.HcoMutatingWebhookNS,
 		Type:                    csvv1alpha1.MutatingAdmissionWebhook,
 		DeploymentName:          hcoWhDeploymentName,
@@ -803,7 +806,32 @@ func GetCSVBase(params *CSVBaseParams) *csvv1alpha1.ClusterServiceVersion {
 				},
 			},
 		},
-		WebhookPath: &mutatingWebhookPath,
+		WebhookPath: ptr.To(util.HCONSWebhookPath),
+	}
+
+	mutatingHyperConvergedWebhook := csvv1alpha1.WebhookDescription{
+		GenerateName:            util.HcoMutatingWebhookHyperConverged,
+		Type:                    csvv1alpha1.MutatingAdmissionWebhook,
+		DeploymentName:          hcoWhDeploymentName,
+		ContainerPort:           util.WebhookPort,
+		AdmissionReviewVersions: stringListToSlice("v1beta1", "v1"),
+		SideEffects:             &mutatingWebhookSideEffects,
+		FailurePolicy:           &failurePolicy,
+		TimeoutSeconds:          &webhookTimeout,
+		Rules: []admissionregistrationv1.RuleWithOperations{
+			{
+				Operations: []admissionregistrationv1.OperationType{
+					admissionregistrationv1.Create,
+					admissionregistrationv1.Update,
+				},
+				Rule: admissionregistrationv1.Rule{
+					APIGroups:   stringListToSlice(util.APIVersionGroup),
+					APIVersions: stringListToSlice(util.APIVersionAlpha, util.APIVersionBeta),
+					Resources:   stringListToSlice("hyperconvergeds"),
+				},
+			},
+		},
+		WebhookPath: ptr.To(util.HCOMutatingWebhookPath),
 	}
 
 	return &csvv1alpha1.ClusterServiceVersion{
@@ -815,16 +843,16 @@ func GetCSVBase(params *CSVBaseParams) *csvv1alpha1.ClusterServiceVersion {
 			Name:      fmt.Sprintf("%v.v%v", params.Name, params.Version.String()),
 			Namespace: "placeholder",
 			Annotations: map[string]string{
-				"alm-examples":   string(almExamples),
-				"capabilities":   "Deep Insights",
-				"certified":      "false",
-				"categories":     "OpenShift Optional",
-				"containerImage": params.Image,
-				"console.openshift.io/disable-operand-delete": "true",
-				"createdAt":   time.Now().Format("2006-01-02 15:04:05"),
-				"description": params.MetaDescription,
-				"repository":  "https://github.com/kubevirt/hyperconverged-cluster-operator",
-				"support":     "false",
+				"alm-examples":                   string(almExamples),
+				"capabilities":                   "Deep Insights",
+				"certified":                      "false",
+				"categories":                     "OpenShift Optional",
+				"containerImage":                 params.Image,
+				DisableOperandDeletionAnnotation: "true",
+				"createdAt":                      time.Now().Format("2006-01-02 15:04:05"),
+				"description":                    params.MetaDescription,
+				"repository":                     "https://github.com/kubevirt/hyperconverged-cluster-operator",
+				"support":                        "false",
 				"operatorframework.io/suggested-namespace":       params.Namespace,
 				"operators.openshift.io/infrastructure-features": `["disconnected","proxy-aware"]`,
 				"operatorframework.io/initialization-resource":   string(almExamples),
@@ -894,8 +922,12 @@ func GetCSVBase(params *CSVBaseParams) *csvv1alpha1.ClusterServiceVersion {
 			},
 			// Skip this in favor of having a separate function to get
 			// the actual StrategyDetailsDeployment when merging CSVs
-			InstallStrategy:    csvv1alpha1.NamedInstallStrategy{},
-			WebhookDefinitions: []csvv1alpha1.WebhookDescription{validatingWebhook, mutatingWebhook},
+			InstallStrategy: csvv1alpha1.NamedInstallStrategy{},
+			WebhookDefinitions: []csvv1alpha1.WebhookDescription{
+				validatingWebhook,
+				mutatingNamespaceWebhook,
+				mutatingHyperConvergedWebhook,
+			},
 			CustomResourceDefinitions: csvv1alpha1.CustomResourceDefinitions{
 				Owned: []csvv1alpha1.CRDDescription{
 					{

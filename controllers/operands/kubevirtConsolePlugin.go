@@ -6,8 +6,10 @@ import (
 	"os"
 	"reflect"
 
+	"k8s.io/utils/ptr"
+
 	log "github.com/go-logr/logr"
-	consolev1alpha1 "github.com/openshift/api/console/v1alpha1"
+	consolev1 "github.com/openshift/api/console/v1"
 	operatorv1 "github.com/openshift/api/operator/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -15,7 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/api/v1beta1"
@@ -26,70 +27,113 @@ import (
 )
 
 const (
-	kvUIPluginName     = "kubevirt-plugin"
-	kvUIPluginSvcName  = kvUIPluginName + "-service"
-	kvUIPluginNameEnv  = "UI_PLUGIN_NAME"
-	kvServingCertName  = "plugin-serving-cert"
-	nginxConfigMapName = "nginx-conf"
+	kvUIPluginName            = "kubevirt-plugin"
+	kvUIPluginDeploymentName  = string(hcoutil.AppComponentUIPlugin)
+	kvUIProxyDeploymentName   = string(hcoutil.AppComponentUIProxy)
+	kvUIPluginSvcName         = kvUIPluginDeploymentName + "-service"
+	kvUIProxySvcName          = kvUIProxyDeploymentName + "-service"
+	kvUIPluginServingCertName = "plugin-serving-cert"
+	kvUIProxyServingCertName  = "console-proxy-serving-cert"
+	kvUIPluginServingCertPath = "/var/serving-cert"
+	kvUIProxyServingCertPath  = "/app/cert"
+	nginxConfigMapName        = "nginx-conf"
 )
 
 // **** Kubevirt UI Plugin Deployment Handler ****
-func newKvUiPluginDplymntHandler(logger log.Logger, Client client.Client, Scheme *runtime.Scheme, hc *hcov1beta1.HyperConverged) ([]Operand, error) {
-	kvUiPluginDeplymnt, err := NewKvUiPluginDeplymnt(hc)
-	if err != nil {
-		return nil, err
-	}
-	return []Operand{newDeploymentHandler(Client, Scheme, kvUiPluginDeplymnt)}, nil
+func newKvUIPluginDeploymentHandler(_ log.Logger, Client client.Client, Scheme *runtime.Scheme, hc *hcov1beta1.HyperConverged) ([]Operand, error) {
+	kvUIPluginDeployment := NewKvUIPluginDeployment(hc)
+	return []Operand{newDeploymentHandler(Client, Scheme, kvUIPluginDeployment)}, nil
+}
+
+// **** Kubevirt UI apiserver proxy Deployment Handler ****
+func newKvUIProxyDeploymentHandler(_ log.Logger, Client client.Client, Scheme *runtime.Scheme, hc *hcov1beta1.HyperConverged) ([]Operand, error) {
+
+	kvUIProxyDeployment := NewKvUIProxyDeployment(hc)
+	return []Operand{newDeploymentHandler(Client, Scheme, kvUIProxyDeployment)}, nil
 }
 
 // **** nginx config map Handler ****
-func newKvUiNginxCmHandler(_ log.Logger, Client client.Client, Scheme *runtime.Scheme, hc *hcov1beta1.HyperConverged) ([]Operand, error) {
-	kvUiNginxCm := NewKvUiNginxCm(hc)
+func newKvUINginxCMHandler(_ log.Logger, Client client.Client, Scheme *runtime.Scheme, hc *hcov1beta1.HyperConverged) ([]Operand, error) {
+	kvUINginxCM := NewKVUINginxCM(hc)
 
-	return []Operand{newCmHandler(Client, Scheme, kvUiNginxCm)}, nil
+	return []Operand{newCmHandler(Client, Scheme, kvUINginxCM)}, nil
 }
 
 // **** Kubevirt UI Console Plugin Custom Resource Handler ****
-func newKvUiPluginCRHandler(_ log.Logger, Client client.Client, Scheme *runtime.Scheme, hc *hcov1beta1.HyperConverged) ([]Operand, error) {
-	kvUiConsolePluginCR := NewKvConsolePlugin(hc)
+func newKvUIPluginCRHandler(_ log.Logger, Client client.Client, Scheme *runtime.Scheme, hc *hcov1beta1.HyperConverged) ([]Operand, error) {
+	kvUIConsolePluginCR := NewKVConsolePlugin(hc)
 
-	return []Operand{newConsolePluginHandler(Client, Scheme, kvUiConsolePluginCR)}, nil
+	return []Operand{newConsolePluginHandler(Client, Scheme, kvUIConsolePluginCR)}, nil
 }
 
-func NewKvUiPluginDeplymnt(hc *hcov1beta1.HyperConverged) (*appsv1.Deployment, error) {
+func NewKvUIPluginDeployment(hc *hcov1beta1.HyperConverged) *appsv1.Deployment {
 	// The env var was validated prior to handler creation
-	kvUiPluginImage, _ := os.LookupEnv(hcoutil.KvUiPluginImageEnvV)
+	kvUIPluginImage, _ := os.LookupEnv(hcoutil.KVUIPluginImageEnvV)
+	deployment := getKvUIDeployment(hc, kvUIPluginDeploymentName, kvUIPluginImage,
+		kvUIPluginServingCertName, kvUIPluginServingCertPath, hcoutil.UIPluginServerPort, hcoutil.AppComponentUIPlugin)
 
-	return &appsv1.Deployment{
+	nginxVolumeMount := corev1.VolumeMount{
+		Name:      nginxConfigMapName,
+		MountPath: "/etc/nginx/nginx.conf",
+		SubPath:   "nginx.conf",
+		ReadOnly:  true,
+	}
+
+	volumeMounts := &deployment.Spec.Template.Spec.Containers[0].VolumeMounts
+	*volumeMounts = append(*volumeMounts, nginxVolumeMount)
+
+	nginxVolume := corev1.Volume{
+		Name: nginxConfigMapName,
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: nginxConfigMapName,
+				},
+			},
+		},
+	}
+	volumes := &deployment.Spec.Template.Spec.Volumes
+	*volumes = append(*volumes, nginxVolume)
+	return deployment
+}
+
+func NewKvUIProxyDeployment(hc *hcov1beta1.HyperConverged) *appsv1.Deployment {
+	// The env var was validated prior to handler creation
+	kvUIProxyImage, _ := os.LookupEnv(hcoutil.KVUIProxyImageEnvV)
+	return getKvUIDeployment(hc, kvUIProxyDeploymentName, kvUIProxyImage, kvUIProxyServingCertName,
+		kvUIProxyServingCertPath, hcoutil.UIProxyServerPort, hcoutil.AppComponentUIProxy)
+}
+
+func getKvUIDeployment(hc *hcov1beta1.HyperConverged, deploymentName string, image string,
+	servingCertName string, servingCertPath string, port int32, componentName hcoutil.AppComponent) *appsv1.Deployment {
+	labels := getLabels(hc, componentName)
+
+	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      kvUIPluginName,
-			Labels:    getLabels(hc, hcoutil.AppComponentDeployment),
+			Name:      deploymentName,
+			Labels:    labels,
 			Namespace: hc.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: pointer.Int32(1),
+			Replicas: ptr.To(int32(1)),
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"app": kvUIPluginName,
-				},
+				MatchLabels: labels,
 			},
 			Strategy: appsv1.DeploymentStrategy{
 				Type: appsv1.RollingUpdateDeploymentStrategyType,
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"app": kvUIPluginName,
-					},
+					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "default",
 					SecurityContext:    components.GetStdPodSecurityContext(),
 					Containers: []corev1.Container{
 						{
-							Name:            kvUIPluginName,
-							Image:           kvUiPluginImage,
-							ImagePullPolicy: corev1.PullAlways,
+							Name:            deploymentName,
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
 							Resources: corev1.ResourceRequirements{
 								Requests: map[corev1.ResourceName]resource.Quantity{
 									corev1.ResourceCPU:    resource.MustParse("10m"),
@@ -97,7 +141,7 @@ func NewKvUiPluginDeplymnt(hc *hcov1beta1.HyperConverged) (*appsv1.Deployment, e
 								},
 							},
 							Ports: []corev1.ContainerPort{{
-								ContainerPort: hcoutil.UiPluginServerPort,
+								ContainerPort: port,
 								Protocol:      corev1.ProtocolTCP,
 							}},
 							SecurityContext:          components.GetStdContainerSecurityContext(),
@@ -105,37 +149,21 @@ func NewKvUiPluginDeplymnt(hc *hcov1beta1.HyperConverged) (*appsv1.Deployment, e
 							TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 							VolumeMounts: []corev1.VolumeMount{
 								{
-									Name:      kvServingCertName,
-									MountPath: "/var/serving-cert",
-									ReadOnly:  true,
-								},
-								{
-									Name:      nginxConfigMapName,
-									MountPath: "/etc/nginx/nginx.conf",
-									SubPath:   "nginx.conf",
+									Name:      servingCertName,
+									MountPath: servingCertPath,
 									ReadOnly:  true,
 								},
 							},
 						},
 					},
-					PriorityClassName: "kubevirt-cluster-critical",
+					PriorityClassName: kvPriorityClass,
 					Volumes: []corev1.Volume{
 						{
-							Name: kvServingCertName,
+							Name: servingCertName,
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
-									SecretName:  kvServingCertName,
-									DefaultMode: pointer.Int32(420),
-								},
-							},
-						},
-						{
-							Name: nginxConfigMapName,
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: nginxConfigMapName,
-									},
+									SecretName:  servingCertName,
+									DefaultMode: ptr.To(int32(420)),
 								},
 							},
 						},
@@ -143,31 +171,77 @@ func NewKvUiPluginDeplymnt(hc *hcov1beta1.HyperConverged) (*appsv1.Deployment, e
 				},
 			},
 		},
-	}, nil
+	}
+
+	if hc.Spec.Infra.NodePlacement != nil {
+		if hc.Spec.Infra.NodePlacement.NodeSelector != nil {
+			deployment.Spec.Template.Spec.NodeSelector = make(map[string]string)
+			for key, value := range hc.Spec.Infra.NodePlacement.NodeSelector {
+				deployment.Spec.Template.Spec.NodeSelector[key] = value
+			}
+		}
+
+		if hc.Spec.Infra.NodePlacement.Affinity != nil {
+			deployment.Spec.Template.Spec.Affinity = hc.Spec.Infra.NodePlacement.Affinity.DeepCopy()
+		}
+
+		if hc.Spec.Infra.NodePlacement.Tolerations != nil {
+			deployment.Spec.Template.Spec.Tolerations = make([]corev1.Toleration, len(hc.Spec.Infra.NodePlacement.Tolerations))
+			copy(deployment.Spec.Template.Spec.Tolerations, hc.Spec.Infra.NodePlacement.Tolerations)
+		}
+	}
+	return deployment
 }
 
-func NewKvUiPluginSvc(hc *hcov1beta1.HyperConverged) *corev1.Service {
+func NewKvUIPluginSvc(hc *hcov1beta1.HyperConverged) *corev1.Service {
 	servicePorts := []corev1.ServicePort{
-		{Port: hcoutil.UiPluginServerPort, Name: kvUIPluginName + "-port", Protocol: corev1.ProtocolTCP, TargetPort: intstr.IntOrString{Type: intstr.Int, IntVal: hcoutil.UiPluginServerPort}},
+		{
+			Port:       hcoutil.UIPluginServerPort,
+			Name:       kvUIPluginDeploymentName + "-port",
+			Protocol:   corev1.ProtocolTCP,
+			TargetPort: intstr.IntOrString{Type: intstr.Int, IntVal: hcoutil.UIPluginServerPort},
+		},
 	}
-	pluginName := kvUIPluginName
-	val, ok := os.LookupEnv(kvUIPluginNameEnv)
-	if ok && val != "" {
-		pluginName = val
-	}
-	labelSelect := map[string]string{"app": pluginName}
 
 	spec := corev1.ServiceSpec{
 		Ports:    servicePorts,
-		Selector: labelSelect,
+		Selector: map[string]string{hcoutil.AppLabelComponent: string(hcoutil.AppComponentUIPlugin)},
 	}
 
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   kvUIPluginSvcName,
-			Labels: getLabels(hc, hcoutil.AppComponentDeployment),
+			Labels: getLabels(hc, hcoutil.AppComponentUIPlugin),
 			Annotations: map[string]string{
-				"service.beta.openshift.io/serving-cert-secret-name": kvServingCertName,
+				"service.beta.openshift.io/serving-cert-secret-name": kvUIPluginServingCertName,
+			},
+			Namespace: hc.Namespace,
+		},
+		Spec: spec,
+	}
+}
+
+func NewKvUIProxySvc(hc *hcov1beta1.HyperConverged) *corev1.Service {
+	servicePorts := []corev1.ServicePort{
+		{
+			Port:       hcoutil.UIProxyServerPort,
+			Name:       kvUIProxyDeploymentName + "-port",
+			Protocol:   corev1.ProtocolTCP,
+			TargetPort: intstr.IntOrString{Type: intstr.Int, IntVal: hcoutil.UIProxyServerPort},
+		},
+	}
+
+	spec := corev1.ServiceSpec{
+		Ports:    servicePorts,
+		Selector: map[string]string{hcoutil.AppLabelComponent: string(hcoutil.AppComponentUIProxy)},
+	}
+
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   kvUIProxySvcName,
+			Labels: getLabels(hc, hcoutil.AppComponentUIProxy),
+			Annotations: map[string]string{
+				"service.beta.openshift.io/serving-cert-secret-name": kvUIProxyServingCertName,
 			},
 			Namespace: hc.Namespace,
 		},
@@ -189,13 +263,13 @@ http {
 			root                /usr/share/nginx/html;
 		}
 	}
-`, hcoutil.UiPluginServerPort)
+`, hcoutil.UIPluginServerPort)
 
-func NewKvUiNginxCm(hc *hcov1beta1.HyperConverged) *corev1.ConfigMap {
+func NewKVUINginxCM(hc *hcov1beta1.HyperConverged) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      nginxConfigMapName,
-			Labels:    getLabels(hc, hcoutil.AppComponentDeployment),
+			Labels:    getLabels(hc, hcoutil.AppComponentUIPlugin),
 			Namespace: hc.Namespace,
 		},
 		Data: map[string]string{
@@ -204,25 +278,40 @@ func NewKvUiNginxCm(hc *hcov1beta1.HyperConverged) *corev1.ConfigMap {
 	}
 }
 
-func NewKvConsolePlugin(hc *hcov1beta1.HyperConverged) *consolev1alpha1.ConsolePlugin {
-	return &consolev1alpha1.ConsolePlugin{
+func NewKVConsolePlugin(hc *hcov1beta1.HyperConverged) *consolev1.ConsolePlugin {
+	return &consolev1.ConsolePlugin{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   kvUIPluginName,
-			Labels: getLabels(hc, hcoutil.AppComponentDeployment),
+			Labels: getLabels(hc, hcoutil.AppComponentUIPlugin),
 		},
-		Spec: consolev1alpha1.ConsolePluginSpec{
+		Spec: consolev1.ConsolePluginSpec{
 			DisplayName: "Kubevirt Console Plugin",
-			Service: consolev1alpha1.ConsolePluginService{
-				Name:      kvUIPluginSvcName,
-				Namespace: hc.Namespace,
-				Port:      hcoutil.UiPluginServerPort,
-				BasePath:  "/",
+			Backend: consolev1.ConsolePluginBackend{
+				Type: consolev1.Service,
+				Service: &consolev1.ConsolePluginService{
+					Name:      kvUIPluginSvcName,
+					Namespace: hc.Namespace,
+					Port:      hcoutil.UIPluginServerPort,
+					BasePath:  "/",
+				},
 			},
+			Proxy: []consolev1.ConsolePluginProxy{{
+				Alias:         kvUIProxyDeploymentName,
+				Authorization: consolev1.UserToken,
+				Endpoint: consolev1.ConsolePluginProxyEndpoint{
+					Type: consolev1.ProxyTypeService,
+					Service: &consolev1.ConsolePluginProxyServiceConfig{
+						Name:      kvUIProxySvcName,
+						Namespace: hc.Namespace,
+						Port:      hcoutil.UIProxyServerPort,
+					},
+				},
+			}},
 		},
 	}
 }
 
-func newConsolePluginHandler(Client client.Client, Scheme *runtime.Scheme, required *consolev1alpha1.ConsolePlugin) Operand {
+func newConsolePluginHandler(Client client.Client, Scheme *runtime.Scheme, required *consolev1.ConsolePlugin) Operand {
 	h := &genericOperand{
 		Client: Client,
 		Scheme: Scheme,
@@ -234,7 +323,7 @@ func newConsolePluginHandler(Client client.Client, Scheme *runtime.Scheme, requi
 }
 
 type consolePluginHooks struct {
-	required *consolev1alpha1.ConsolePlugin
+	required *consolev1.ConsolePlugin
 }
 
 func (h consolePluginHooks) getFullCr(_ *hcov1beta1.HyperConverged) (client.Object, error) {
@@ -242,7 +331,7 @@ func (h consolePluginHooks) getFullCr(_ *hcov1beta1.HyperConverged) (client.Obje
 }
 
 func (h consolePluginHooks) getEmptyCr() client.Object {
-	return &consolev1alpha1.ConsolePlugin{
+	return &consolev1.ConsolePlugin{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: h.required.Name,
 		},
@@ -252,7 +341,7 @@ func (h consolePluginHooks) getEmptyCr() client.Object {
 func (consolePluginHooks) justBeforeComplete(_ *common.HcoRequest) { /* no implementation */ }
 
 func (h consolePluginHooks) updateCr(req *common.HcoRequest, Client client.Client, exists runtime.Object, _ runtime.Object) (bool, bool, error) {
-	found, ok := exists.(*consolev1alpha1.ConsolePlugin)
+	found, ok := exists.(*consolev1.ConsolePlugin)
 
 	if !ok {
 		return false, false, errors.New("can't convert to ConsolePlugin")
@@ -304,12 +393,12 @@ func (h consoleHandler) ensure(req *common.HcoRequest) *EnsureResult {
 			return &EnsureResult{
 				Err: err,
 			}
-		} else {
-			return &EnsureResult{
-				Err:         nil,
-				Updated:     true,
-				UpgradeDone: true,
-			}
+		}
+
+		return &EnsureResult{
+			Err:         nil,
+			Updated:     true,
+			UpgradeDone: true,
 		}
 	}
 	return &EnsureResult{

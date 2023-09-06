@@ -52,7 +52,6 @@ PACKAGE_NAME="community-kubevirt-hyperconverged"
 CSV_DIR="${OLM_DIR}/${PACKAGE_NAME}/${CSV_VERSION}"
 DEFAULT_CSV_GENERATOR="/usr/bin/csv-generator"
 SSP_CSV_GENERATOR="/csv-generator"
-TTO_CSV_GENERATOR="/csv-generator"
 
 INDEX_IMAGE_DIR=${DEPLOY_DIR}/index-image
 CSV_INDEX_IMAGE_DIR="${INDEX_IMAGE_DIR}/${PACKAGE_NAME}/${CSV_VERSION}"
@@ -96,18 +95,6 @@ function gen_csv() {
 }
 
 function create_virt_csv() {
-  local apiSha
-  local controllerSha
-  local launcherSha
-  local handlerSha
-
-  apiSha="${KUBEVIRT_API_IMAGE/*@/}"
-  controllerSha="${KUBEVIRT_CONTROLLER_IMAGE/*@/}"
-  launcherSha="${KUBEVIRT_LAUNCHER_IMAGE/*@/}"
-  handlerSha="${KUBEVIRT_HANDLER_IMAGE/*@/}"
-  exportProxySha="${KUBEVIRT_EXPORTPROXY_IMAGE/*@/}"
-  exportServerSha="${KUBEVIRT_EXPORSERVER_IMAGE/*@/}"
-
   local operatorName="kubevirt"
   local dumpCRDsArg="--dumpCRDs"
   local operatorArgs
@@ -115,15 +102,15 @@ function create_virt_csv() {
     --namespace=${OPERATOR_NAMESPACE} \
     --csvVersion=${CSV_VERSION} \
     --operatorImageVersion=${KUBEVIRT_OPERATOR_IMAGE/*@/} \
-    --dockerPrefix=${KUBEVIRT_OPERATOR_IMAGE%\/*} \
     --kubeVirtVersion=${KUBEVIRT_VERSION} \
-    --apiSha=${apiSha} \
-    --controllerSha=${controllerSha} \
-    --handlerSha=${handlerSha} \
-    --launcherSha=${launcherSha} \
-    --exportProxySha=${exportProxySha} \
-    --exportServerSha=${exportServerSha} \
-    --gsSha=${KUBEVIRT_LIBGUESTFS_TOOLS_IMAGE/*@/} \
+    --virt-api-image="${KUBEVIRT_API_IMAGE}" \
+    --virt-controller-image="${KUBEVIRT_CONTROLLER_IMAGE}" \
+    --virt-handler-image="${KUBEVIRT_HANDLER_IMAGE}" \
+    --virt-launcher-image="${KUBEVIRT_LAUNCHER_IMAGE}" \
+    --virt-export-proxy-image="${KUBEVIRT_EXPORTPROXY_IMAGE}" \
+    --virt-export-server-image="${KUBEVIRT_EXPORSERVER_IMAGE}" \
+    --gs-image="${KUBEVIRT_LIBGUESTFS_TOOLS_IMAGE}" \
+    --virt-operator-image="${KUBEVIRT_OPERATOR_IMAGE}"
   "
 
   gen_csv "${DEFAULT_CSV_GENERATOR}" "${operatorName}" "${KUBEVIRT_OPERATOR_IMAGE}" "${dumpCRDsArg}" "${operatorArgs}"
@@ -163,20 +150,6 @@ function create_ssp_csv() {
   "
 
   gen_csv ${SSP_CSV_GENERATOR} ${operatorName} "${SSP_OPERATOR_IMAGE}" ${dumpCRDsArg} ${operatorArgs}
-  echo "${operatorName}"
-}
-
-function create_tto_csv() {
-  local operatorName="tekton-tasks-operator"
-  local dumpCRDsArg="--dump-crds"
-  local operatorArgs=" \
-    --namespace=${OPERATOR_NAMESPACE} \
-    --csv-version=${CSV_VERSION} \
-    --operator-image=${TTO_OPERATOR_IMAGE} \
-    --operator-version=${TTO_VERSION} \
-  "
-
-  gen_csv ${TTO_CSV_GENERATOR} ${operatorName} "${TTO_OPERATOR_IMAGE}" ${dumpCRDsArg} ${operatorArgs}
   echo "${operatorName}"
 }
 
@@ -221,6 +194,23 @@ function create_hpp_csv() {
   echo "${operatorName}"
 }
 
+function create_mtq_csv() {
+  local operatorName="managed-tenant-quota"
+  local dumpCRDsArg="--dump-crds"
+  local operatorArgs=" \
+    --csv-version=${CSV_VERSION} \
+    --operator-image=${MTQ_OPERATOR_IMAGE} \
+    --controller-image=${MTQ_CONTROLLER_IMAGE} \
+    --mtq-lock-server-image=${MTQ_LOCKSERVER_IMAGE} \
+    --operator-version=${MTQ_VERSION} \
+    --namespace=${OPERATOR_NAMESPACE} \
+    --pull-policy=IfNotPresent \
+  "
+
+  gen_csv ${DEFAULT_CSV_GENERATOR} ${operatorName} "${MTQ_OPERATOR_IMAGE}" ${dumpCRDsArg} ${operatorArgs}
+  echo "${operatorName}"
+}
+
 TEMPDIR=$(mktemp -d) || (echo "Failed to create temp directory" && exit 1)
 pushd $TEMPDIR
 virtFile=$(create_virt_csv)
@@ -229,12 +219,12 @@ cnaFile=$(create_cna_csv)
 cnaCsv="${TEMPDIR}/${cnaFile}.${CSV_EXT}"
 sspFile=$(create_ssp_csv)
 sspCsv="${TEMPDIR}/${sspFile}.${CSV_EXT}"
-ttoFile=$(create_tto_csv)
-ttoCsv="${TEMPDIR}/${ttoFile}.${CSV_EXT}"
 cdiFile=$(create_cdi_csv)
 cdiCsv="${TEMPDIR}/${cdiFile}.${CSV_EXT}"
 hppFile=$(create_hpp_csv)
 hppCsv="${TEMPDIR}/${hppFile}.${CSV_EXT}"
+mtqFile=$(create_mtq_csv)
+mtqCsv="${TEMPDIR}/${mtqFile}.${CSV_EXT}"
 csvOverrides="${TEMPDIR}/csv_overrides.${CSV_EXT}"
 keywords="  keywords:
   - KubeVirt
@@ -281,9 +271,9 @@ EOM
 )
 
 # validate CSVs. Make sure each one of them contain an image (and so, also not empty):
-csvs=("${cnaCsv}" "${virtCsv}" "${sspCsv}" "${ttoCsv}" "${cdiCsv}" "${hppCsv}")
+csvs=("${cnaCsv}" "${virtCsv}" "${sspCsv}" "${cdiCsv}" "${hppCsv}" "${mtqCsv}")
 for csv in "${csvs[@]}"; do
-  grep -E "^ *image: [a-zA-Z0-9/\.:@\-]+$" ${csv}
+  grep -E "^ *image: [_a-zA-Z0-9/\.:@\-]+$" ${csv}
 done
 
 # Build and write deploy dir
@@ -293,9 +283,9 @@ ${PROJECT_ROOT}/tools/manifest-templator/manifest-templator \
   --cna-csv="$(<${cnaCsv})" \
   --virt-csv="$(<${virtCsv})" \
   --ssp-csv="$(<${sspCsv})" \
-  --tto-csv="$(<${ttoCsv})" \
   --cdi-csv="$(<${cdiCsv})" \
   --hpp-csv="$(<${hppCsv})" \
+  --mtq-csv="$(<${mtqCsv})" \
   --kv-virtiowin-image-name="${KUBEVIRT_VIRTIO_IMAGE}" \
   --operator-namespace="${OPERATOR_NAMESPACE}" \
   --smbios="${SMBIOS}" \
@@ -304,7 +294,6 @@ ${PROJECT_ROOT}/tools/manifest-templator/manifest-templator \
   --cdi-version="${CDI_VERSION}" \
   --cnao-version="${NETWORK_ADDONS_VERSION}" \
   --ssp-version="${SSP_VERSION}" \
-  --tto-version="${TTO_VERSION}" \
   --hppo-version="${HPPO_VERSION}" \
   --operator-image="${HCO_OPERATOR_IMAGE}" \
   --webhook-image="${HCO_WEBHOOK_IMAGE}" \
@@ -326,9 +315,9 @@ ${PROJECT_ROOT}/tools/csv-merger/csv-merger \
   --cna-csv="$(<${cnaCsv})" \
   --virt-csv="$(<${virtCsv})" \
   --ssp-csv="$(<${sspCsv})" \
-  --tto-csv="$(<${ttoCsv})" \
   --cdi-csv="$(<${cdiCsv})" \
   --hpp-csv="$(<${hppCsv})" \
+  --mtq-csv="$(<${mtqCsv})" \
   --kv-virtiowin-image-name="${KUBEVIRT_VIRTIO_IMAGE}" \
   --csv-version=${CSV_VERSION_PARAM} \
   --replaces-csv-version=${REPLACES_CSV_VERSION} \
@@ -344,12 +333,13 @@ ${PROJECT_ROOT}/tools/csv-merger/csv-merger \
   --cdi-version="${CDI_VERSION}" \
   --cnao-version="${NETWORK_ADDONS_VERSION}" \
   --ssp-version="${SSP_VERSION}" \
-  --tto-version="${TTO_VERSION}" \
   --hppo-version="${HPPO_VERSION}" \
+  --mtq-version="${MTQ_VERSION}" \
   --related-images-list="${DIGEST_LIST}" \
   --operator-image-name="${HCO_OPERATOR_IMAGE}" \
   --webhook-image-name="${HCO_WEBHOOK_IMAGE}" \
   --kubevirt-consoleplugin-image-name="${KUBEVIRT_CONSOLE_PLUGIN_IMAGE}" \
+  --kubevirt-consoleproxy-image-name="${KUBEVIRT_CONSOLE_PROXY_IMAGE}" \
   --cli-downloads-image-name="${HCO_DOWNLOADS_IMAGE}" > "${CSV_DIR}/${OPERATOR_NAME}.v${CSV_VERSION}.${CSV_EXT}"
 
 rendered_csv="$(cat "${CSV_DIR}/${OPERATOR_NAME}.v${CSV_VERSION}.${CSV_EXT}")"

@@ -15,7 +15,18 @@ digraph component {
 		"deployment/hco-operator" [label="deployment/hco-operator"]
 		"deployment/hco-webhook" [label="deployment/hco-webhook"]
 		"deployment/hyperconverged-cluster-cli-download" [label="deployment/hyperconverged-cluster-cli-download"]
-		"deployment/kubevirt-plugin" [label="deployment/kubevirt-plugin"]
+	}
+	subgraph "cluster_kubevirt-apiserver-proxy" {
+		fontname="Courier-Bold" fontsize=42 group="kubevirt-apiserver-proxy" label="kubevirt-apiserver-proxy" rank=same style=dashed
+		"deployment/kubevirt-apiserver-proxy" [label="deployment/kubevirt-apiserver-proxy"]
+	}
+	subgraph "cluster_kubevirt-console-plugin" {
+		fontname="Courier-Bold" fontsize=42 group="kubevirt-console-plugin" label="kubevirt-console-plugin" rank=same style=dashed
+		"deployment/kubevirt-console-plugin" [label="deployment/kubevirt-console-plugin"]
+	}
+	subgraph "cluster_multi-tenant" {
+		fontname="Courier-Bold" fontsize=42 group="multi-tenant" label="multi-tenant" rank=same style=dashed
+		"deployment/mtq-operator" [label="deployment/mtq-operator"]
 	}
 	subgraph cluster_network {
 		fontname="Courier-Bold" fontsize=42 group=network label=network rank=same style=dashed
@@ -41,10 +52,6 @@ digraph component {
 		"deployment/cdi-uploadproxy" [label="deployment/cdi-uploadproxy"]
 		"deployment/hostpath-provisioner-operator" [label="deployment/hostpath-provisioner-operator"]
 	}
-	subgraph cluster_tekton {
-		fontname="Courier-Bold" fontsize=42 group=tekton label=tekton rank=same style=dashed
-		"deployment/tekton-tasks-operator" [label="deployment/tekton-tasks-operator"]
-	}
 	subgraph cluster_templating {
 		fontname="Courier-Bold" fontsize=42 group=templating label=templating rank=same style=dashed
 		"deployment/virt-template-validator" [label="deployment/virt-template-validator"]
@@ -55,10 +62,12 @@ digraph component {
 	}
 	edge [style=invis]
 	"KubeVirt/kubevirt-kubevirt-hyperconverged" -> "deployment/hco-operator"
-	"deployment/hco-operator" -> "NetworkAddonsConfig/cluster"
+	"deployment/hco-operator" -> "deployment/kubevirt-apiserver-proxy"
+	"deployment/kubevirt-apiserver-proxy" -> "deployment/kubevirt-console-plugin"
+	"deployment/kubevirt-console-plugin" -> "deployment/mtq-operator"
+	"deployment/mtq-operator" -> "NetworkAddonsConfig/cluster"
 	"NetworkAddonsConfig/cluster" -> "SSP/ssp-kubevirt-hyperconverged"
 	"SSP/ssp-kubevirt-hyperconverged" -> "CDI/cdi-kubevirt-hyperconverged"
-	"CDI/cdi-kubevirt-hyperconverged" -> "deployment/tekton-tasks-operator"
-	"deployment/tekton-tasks-operator" -> "deployment/virt-template-validator"
+	"CDI/cdi-kubevirt-hyperconverged" -> "deployment/virt-template-validator"
 	"deployment/virt-template-validator" -> "HyperConverged/kubevirt-hyperconverged"
 }

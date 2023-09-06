@@ -9,7 +9,7 @@ import (
 
 	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/api/v1beta1"
 	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/common"
-	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/commonTestUtils"
+	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/commontestutils"
 )
 
 var origFile string
@@ -19,14 +19,12 @@ var _ = Describe("upgradePatches", func() {
 	BeforeEach(func() {
 		wd, _ := os.Getwd()
 		origFile = path.Join(wd, "upgradePatches.json")
-		err := commonTestUtils.CopyFile(origFile+".orig", origFile)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(commontestutils.CopyFile(origFile+".orig", origFile)).To(Succeed())
 		hcoUpgradeChangesRead = false
 	})
 
 	AfterEach(func() {
-		err := os.Remove(origFile + ".orig")
-		Expect(err).ToNot(HaveOccurred())
+		Expect(os.Remove(origFile + ".orig")).To(Succeed())
 		hcoUpgradeChangesRead = false
 	})
 
@@ -36,33 +34,27 @@ var _ = Describe("upgradePatches", func() {
 		var req *common.HcoRequest
 
 		BeforeEach(func() {
-			hco = commonTestUtils.NewHco()
-			req = commonTestUtils.NewReq(hco)
+			hco = commontestutils.NewHco()
+			req = commontestutils.NewReq(hco)
 		})
 
 		AfterEach(func() {
-			err := commonTestUtils.CopyFile(origFile, origFile+".orig")
-			Expect(err).ToNot(HaveOccurred())
+			Expect(commontestutils.CopyFile(origFile, origFile+".orig")).To(Succeed())
 		})
 
 		It("should correctly parse and validate actual upgradePatches.json", func() {
-			err := validateUpgradePatches(req)
-			Expect(err).ToNot(HaveOccurred())
+			Expect(validateUpgradePatches(req)).To(Succeed())
 		})
 
 		It("should correctly parse and validate empty upgradePatches", func() {
-			err := copyTestFile("empty.json")
-			Expect(err).ToNot(HaveOccurred())
-
-			err = validateUpgradePatches(req)
-			Expect(err).ToNot(HaveOccurred())
+			Expect(copyTestFile("empty.json")).To(Succeed())
+			Expect(validateUpgradePatches(req)).To(Succeed())
 		})
 
 		It("should fail parsing upgradePatches with bad json", func() {
-			err := copyTestFile("badJson.json")
-			Expect(err).ToNot(HaveOccurred())
+			Expect(copyTestFile("badJson.json")).To(Succeed())
 
-			err = validateUpgradePatches(req)
+			err := validateUpgradePatches(req)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).Should(HavePrefix("invalid character"))
 		})
@@ -70,10 +62,9 @@ var _ = Describe("upgradePatches", func() {
 		Context("hcoCRPatchList", func() {
 
 			It("should fail validating upgradePatches with bad semver ranges", func() {
-				err := copyTestFile("badSemverRange.json")
-				Expect(err).ToNot(HaveOccurred())
+				Expect(copyTestFile("badSemverRange.json")).To(Succeed())
 
-				err = validateUpgradePatches(req)
+				err := validateUpgradePatches(req)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).Should(HavePrefix("Could not get version from string:"))
 			})
@@ -81,10 +72,9 @@ var _ = Describe("upgradePatches", func() {
 			DescribeTable(
 				"should fail validating upgradePatches with bad patches",
 				func(filename, message string) {
-					err := copyTestFile(filename)
-					Expect(err).ToNot(HaveOccurred())
+					Expect(copyTestFile(filename)).To(Succeed())
 
-					err = validateUpgradePatches(req)
+					err := validateUpgradePatches(req)
 					Expect(err).To(HaveOccurred())
 					Expect(err.Error()).Should(HavePrefix(message))
 				},
@@ -110,10 +100,9 @@ var _ = Describe("upgradePatches", func() {
 		Context("objectsToBeRemoved", func() {
 
 			It("should fail validating upgradePatches with bad semver ranges", func() {
-				err := copyTestFile("badSemverRangeOR.json")
-				Expect(err).ToNot(HaveOccurred())
+				Expect(copyTestFile("badSemverRangeOR.json")).To(Succeed())
 
-				err = validateUpgradePatches(req)
+				err := validateUpgradePatches(req)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).Should(HavePrefix("Could not get version from string:"))
 			})
@@ -121,10 +110,9 @@ var _ = Describe("upgradePatches", func() {
 			DescribeTable(
 				"should fail validating upgradePatches with bad patches",
 				func(filename, message string) {
-					err := copyTestFile(filename)
-					Expect(err).ToNot(HaveOccurred())
+					Expect(copyTestFile(filename)).To(Succeed())
 
-					err = validateUpgradePatches(req)
+					err := validateUpgradePatches(req)
 					Expect(err).To(HaveOccurred())
 					Expect(err.Error()).Should(HavePrefix(message))
 				},
@@ -168,6 +156,5 @@ var _ = Describe("upgradePatches", func() {
 
 func copyTestFile(filename string) error {
 	testFilesLocation := getTestFilesLocation() + "/upgradePatches"
-	err := commonTestUtils.CopyFile(origFile, path.Join(testFilesLocation, filename))
-	return err
+	return commontestutils.CopyFile(origFile, path.Join(testFilesLocation, filename))
 }

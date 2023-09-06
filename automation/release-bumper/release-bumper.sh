@@ -75,10 +75,11 @@ function get_current_versions {
     ["CDI"]=""
     ["NETWORK_ADDONS"]=""
     ["SSP"]=""
-    ["TTO"]=""
     ["HPPO"]=""
     ["HPP"]=""
+    ["MTQ"]=""
     ["KUBEVIRT_CONSOLE_PLUGIN"]=""
+    ["KUBEVIRT_CONSOLE_PROXY"]=""
   )
 
   for component in "${!CURRENT_VERSIONS[@]}"; do
@@ -92,10 +93,11 @@ function get_updated_versions {
     ["CDI"]="kubevirt/containerized-data-importer"
     ["NETWORK_ADDONS"]="kubevirt/cluster-network-addons-operator"
     ["SSP"]="kubevirt/ssp-operator"
-    ["TTO"]="kubevirt/tekton-tasks-operator"
     ["HPPO"]="kubevirt/hostpath-provisioner-operator"
     ["HPP"]="kubevirt/hostpath-provisioner"
+    ["MTQ"]="kubevirt/managed-tenant-quota"
     ["KUBEVIRT_CONSOLE_PLUGIN"]="kubevirt-ui/kubevirt-plugin"
+    ["KUBEVIRT_CONSOLE_PROXY"]="kubevirt-ui/kubevirt-apiserver-proxy"
   )
 
   IMPORT_REPOS=(
@@ -103,7 +105,7 @@ function get_updated_versions {
     ["CDI"]="kubevirt.io/containerized-data-importer-api"
     ["NETWORK_ADDONS"]="kubevirt/cluster-network-addons-operator"
     ["SSP"]="kubevirt.io/ssp-operator/api"
-    ["TTO"]="kubevirt/tekton-tasks-operator/api"
+    ["MTQ"]="kubevirt.io/managed-tenant-quota"
   )
 
   UPDATED_VERSIONS=()

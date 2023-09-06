@@ -81,6 +81,7 @@ if [[ -n "${KVM_EMULATION}" ]]; then
   ${CMD} wait deployment ${HCO_WH_DEPLOYMENT_NAME} --for condition=Available -n ${HCO_NAMESPACE} --timeout="30m"
 fi
 
+export OUTPUT_DIR=${ARTIFACT_DIR}
 source hack/compare_scc.sh
 dump_sccs_before
 
@@ -106,10 +107,6 @@ echo "----- Get virtctl"
 KV_VERSION=$( ${CMD} get kubevirt.kubevirt.io/kubevirt-kubevirt-hyperconverged -n ${HCO_NAMESPACE} -o=jsonpath="{.status.observedKubeVirtVersion}")
 ARCH=$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/') || windows-amd64.exe
 echo ${ARCH}
-### TODO: remove this once we can consume only kubevirt >= v0.55.0
-# --local-ssh-opts needed to bypass host check is available only starting with kubevirt v0.55.0
-KV_VERSION=v0.55.0
-###
 curl -L -o ~/virtctl https://github.com/kubevirt/kubevirt/releases/download/${KV_VERSION}/virtctl-${KV_VERSION}-${ARCH}
 chmod +x ~/virtctl
 ###################
@@ -121,7 +118,7 @@ KUBECTL_BINARY=${CMD} INSTALLED_NAMESPACE=${HCO_NAMESPACE} printOperatorConditio
 ### Create a VM ###
 Msg "Create a simple VM on the previous version cluster, before the upgrade"
 ${CMD} create namespace ${VMS_NAMESPACE}
-ssh-keygen -f ./hack/test_ssh -q -N ""
+ssh-keygen -t ecdsa -f ./hack/test_ssh -q -N ""
 cat << END > ./hack/cloud-init.sh
 #!/bin/sh
 export NEW_USER="cirros"
@@ -184,7 +181,7 @@ HCO_OPERATORGROUP_NAME=$(${CMD} get og -n ${HCO_NAMESPACE} -o jsonpath='{.items[
 source hack/patch_og.sh
 patch_og ${TARGET_CHANNEL}
 sleep 30
-CSV=$( ${CMD} get csv -o name -n ${HCO_NAMESPACE} | grep ${INITIAL_CHANNEL})
+CSV=$( ${CMD} get csv -o name -n ${HCO_NAMESPACE} | grep ${INITIAL_CHANNEL}) || true
 if [ -n "${CSV}" ] && [ ${OG_PATCHED} -eq 1 ]
 then
   ${CMD} delete "${CSV}" -n ${HCO_NAMESPACE}
@@ -293,11 +290,8 @@ Msg "Check that OVS is deployed or not deployed according to deployOVS annotatio
 ./hack/retry.sh 40 15 "CMD=${CMD} PREVIOUS_OVS_ANNOTATION=${PREVIOUS_OVS_ANNOTATION}\
  PREVIOUS_OVS_STATE=${PREVIOUS_OVS_STATE} ./hack/check_upgrade_ovs.sh"
 
-Msg "Check that managed objects has correct labels"
-./hack/retry.sh 10 30 "KUBECTL_BINARY=${CMD} ./hack/check_labels.sh"
-
-Msg "Check the defaulting mechanism"
-KUBECTL_BINARY=${CMD} INSTALLED_NAMESPACE=${HCO_NAMESPACE} ./hack/check_defaults.sh
+Msg "Ensure that console plugin deployment and service has been renamed successfully"
+KUBECTL_BINARY=${CMD} INSTALLED_NAMESPACE=${HCO_NAMESPACE} ./hack/check_upgrade_console_plugin.sh
 
 Msg "Check that the v2v CRDs and deployments were removed"
 if ${CMD} get crd | grep -q v2v.kubevirt.io; then
@@ -321,8 +315,21 @@ else
     echo "v2v references removed from .status.relatedObjects"
 fi
 
-Msg "check golden images"
-KUBECTL_BINARY=${CMD} INSTALLED_NAMESPACE=${HCO_NAMESPACE} ./hack/check_golden_images.sh
+Msg "Check that the TTO CRD was removed"
+if ${CMD} get crd | grep -q tektontasks.tektontasks.kubevirt.io; then
+    echo "The TTO CRD should not be found; it had to be removed."
+    exit 1
+else
+    echo "TTO CRD removed"
+fi
+
+Msg "Check that the TTO references were removed from .status.relatedObjects"
+if ${CMD} -n ${HCO_NAMESPACE} ${HCO_KIND} ${HCO_RESOURCE_NAME} -o=jsonpath={.status.relatedObjects[*].apiVersion} | grep -q tektontasks.kubevirt.io; then
+    echo "TTO reference should not be found in relatedObjects; it has to be removed."
+    exit 1
+else
+    echo "TTO reference removed from .status.relatedObjects"
+fi
 
 Msg "check virtio-win image is in configmap"
 VIRTIOWIN_IMAGE_CSV=$(${CMD} get ${CSV} -n ${HCO_NAMESPACE} \
@@ -338,9 +345,5 @@ ${CMD} logs -n ${HCO_NAMESPACE} "${HCO_POD}"
 Msg "Read the HCO webhook log before it been deleted"
 WH_POD=$( ${CMD} get -n ${HCO_NAMESPACE} pods -l "name=hyperconverged-cluster-webhook" -o name)
 ${CMD} logs -n ${HCO_NAMESPACE} "${WH_POD}"
-
-Msg "Brutally delete HCO removing the namespace where it's running"
-source hack/test_delete_ns.sh
-test_delete_ns
 
 echo "upgrade-test completed successfully."

@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	networkaddonsshared "github.com/kubevirt/cluster-network-addons-operator/pkg/apis/networkaddonsoperator/shared"
@@ -143,6 +144,19 @@ func NewNetworkAddons(hc *hcov1beta1.HyperConverged, opts ...string) (*networkad
 		KubeMacPool: &networkaddonsshared.KubeMacPool{},
 	}
 
+	nameServerIP, err := getKSDNameServerIP(hc.Spec.KubeSecondaryDNSNameServerIP)
+	if err != nil {
+		return nil, err
+	}
+
+	if hc.Spec.FeatureGates.DeployKubeSecondaryDNS != nil && *hc.Spec.FeatureGates.DeployKubeSecondaryDNS {
+		baseDomain := hcoutil.GetClusterInfo().GetBaseDomain()
+		cnaoSpec.KubeSecondaryDNS = &networkaddonsshared.KubeSecondaryDNS{
+			Domain:       baseDomain,
+			NameServerIP: nameServerIP,
+		}
+	}
+
 	cnaoSpec.Ovs = hcoAnnotation2CnaoSpec(hc.ObjectMeta.Annotations)
 	cnaoInfra := hcoConfig2CnaoPlacement(hc.Spec.Infra.NodePlacement)
 	cnaoWorkloads := hcoConfig2CnaoPlacement(hc.Spec.Workloads.NodePlacement)
@@ -164,6 +178,18 @@ func NewNetworkAddons(hc *hcov1beta1.HyperConverged, opts ...string) (*networkad
 	}
 
 	return cna, nil
+}
+
+func getKSDNameServerIP(nameServerIPPtr *string) (string, error) {
+	var nameServerIP string
+	if nameServerIPPtr != nil {
+		nameServerIP = *nameServerIPPtr
+		if nameServerIP != "" && !net.IsIPv4String(nameServerIP) {
+			return "", errors.New("kubeSecondaryDNSNameServerIP isn't a valid IPv4")
+		}
+	}
+
+	return nameServerIP, nil
 }
 
 func NewNetworkAddonsWithNameOnly(hc *hcov1beta1.HyperConverged, opts ...string) *networkaddonsv1.NetworkAddonsConfig {

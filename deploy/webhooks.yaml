@@ -203,3 +203,39 @@ webhooks:
     scope: '*'
   sideEffects: None
   timeoutSeconds: 30
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutate-hco.kubevirt.io
+  annotations:
+    cert-manager.io/inject-ca-from: kubevirt-hyperconverged/hyperconverged-cluster-webhook-service-cert
+  labels:
+    name: hyperconverged-cluster-webhook
+webhooks:
+- name: mutate-hyperconverged-hco.kubevirt.io
+  admissionReviewVersions:
+  - v1beta1
+  - v1
+  clientConfig:
+    # caBundle: WILL BE INJECTED BY CERT-MANAGER BECAUSE OF THE ANNOTATION
+    service:
+      name: hyperconverged-cluster-webhook-service
+      namespace: kubevirt-hyperconverged
+      path: /mutate-hco-kubevirt-io-v1beta1-hyperconverged
+      port: 4343
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  rules:
+  - apiGroups:
+    - "hco.kubevirt.io"
+    apiVersions:
+    - "v1beta1"
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - hyperconvergeds
+    scope: '*'
+  sideEffects: NoneOnDryRun
+  timeoutSeconds: 30

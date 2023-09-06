@@ -26,6 +26,7 @@ import (
 	"path"
 	"sort"
 	"strconv"
+	"strings"
 
 	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
 
@@ -54,9 +55,9 @@ var (
 	cnaCsv            = flag.String("cna-csv", "", "Cluster Network Addons CSV string")
 	virtCsv           = flag.String("virt-csv", "", "KubeVirt CSV string")
 	sspCsv            = flag.String("ssp-csv", "", "Scheduling Scale Performance CSV string")
-	ttoCsv            = flag.String("tto-csv", "", "Tekton tasks operator CSV string")
 	cdiCsv            = flag.String("cdi-csv", "", "Containerized Data Importer CSV String")
 	hppCsv            = flag.String("hpp-csv", "", "HostPath Provisioner Operator CSV String")
+	mtqCsv            = flag.String("mtq-csv", "", "Managed Tenant Quota Operator CSV String")
 	operatorNamespace = flag.String("operator-namespace", "kubevirt-hyperconverged", "Name of the Operator")
 	operatorImage     = flag.String("operator-image", "", "HyperConverged Cluster Operator image")
 	webhookImage      = flag.String("webhook-image", "", "HyperConverged Cluster Webhook image")
@@ -69,8 +70,8 @@ var (
 	cdiVersion        = flag.String("cdi-version", "", "CDI operator version")
 	cnaoVersion       = flag.String("cnao-version", "", "CNA operator version")
 	sspVersion        = flag.String("ssp-version", "", "SSP operator version")
-	ttoVersion        = flag.String("tto-version", "", "Tekton tasks operator operator version")
 	hppoVersion       = flag.String("hppo-version", "", "HPP operator version")
+	mtqVersion        = flag.String("mtq-version", "", "MTQ operator version")
 	apiSources        = flag.String("api-sources", cwd+"/...", "Project sources")
 )
 
@@ -371,28 +372,34 @@ func createService(webhook csvv1alpha1.WebhookDescription, csvStruct *csvv1alpha
 func getCsvWithComponent() []util.CsvWithComponent {
 	componentsWithCsvs := []util.CsvWithComponent{
 		{
+			Name:      "CNA",
 			Csv:       *cnaCsv,
 			Component: hcoutil.AppComponentNetwork,
 		},
 		{
+			Name:      "KubeVirt",
 			Csv:       *virtCsv,
 			Component: hcoutil.AppComponentCompute,
 		},
 		{
+			Name:      "SSP",
 			Csv:       *sspCsv,
 			Component: hcoutil.AppComponentSchedule,
 		},
 		{
-			Csv:       *ttoCsv,
-			Component: hcoutil.AppComponentTekton,
-		},
-		{
+			Name:      "CDI",
 			Csv:       *cdiCsv,
 			Component: hcoutil.AppComponentStorage,
 		},
 		{
+			Name:      "HPP",
 			Csv:       *hppCsv,
 			Component: hcoutil.AppComponentStorage,
+		},
+		{
+			Name:      "MTQ",
+			Csv:       *mtqCsv,
+			Component: hcoutil.AppComponentMultiTenant,
 		},
 	}
 	return componentsWithCsvs
@@ -413,8 +420,8 @@ func getOperatorParameters() *components.DeploymentOperatorParams {
 		CdiVersion:         *cdiVersion,
 		CnaoVersion:        *cnaoVersion,
 		SspVersion:         *sspVersion,
-		TtoVersion:         *ttoVersion,
 		HppoVersion:        *hppoVersion,
+		MtqVersion:         *mtqVersion,
 		Env:                []corev1.EnvVar{},
 	}
 	return params
@@ -439,6 +446,12 @@ func writeOperatorDeploymentsAndServices(deployments []appsv1.Deployment, servic
 	check(err)
 	defer operatorYaml.Close()
 	for _, deployment := range deployments {
+		if strings.HasPrefix(deployment.Name, "hyperconverged-cluster-") {
+			for i := range deployment.Spec.Template.Spec.Containers {
+				deployment.Spec.Template.Spec.Containers[i].ImagePullPolicy = corev1.PullAlways
+			}
+		}
+
 		check(util.MarshallObject(deployment, operatorYaml))
 	}
 

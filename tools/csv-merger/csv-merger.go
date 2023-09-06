@@ -32,9 +32,9 @@ import (
 	"sort"
 	"strings"
 
+	"dario.cat/mergo"
 	"github.com/blang/semver/v4"
 	"github.com/ghodss/yaml"
-	"github.com/imdario/mergo"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 
 	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/components"
@@ -56,8 +56,8 @@ const (
 )
 
 var (
-	supported_archs = []string{"arch.amd64"}
-	supported_os    = []string{"os.linux"}
+	supportedArches = []string{"arch.amd64"}
+	supportedOS     = []string{"os.linux"}
 )
 
 type EnvVarFlags []corev1.EnvVar
@@ -85,13 +85,14 @@ var (
 	cnaCsv              = flag.String("cna-csv", "", "Cluster Network Addons CSV string")
 	virtCsv             = flag.String("virt-csv", "", "KubeVirt CSV string")
 	sspCsv              = flag.String("ssp-csv", "", "Scheduling Scale Performance CSV string")
-	ttoCsv              = flag.String("tto-csv", "", "Tekton tasks operator CSV string")
 	cdiCsv              = flag.String("cdi-csv", "", "Containerized Data Importer CSV String")
 	hppCsv              = flag.String("hpp-csv", "", "HostPath Provisioner Operator CSV String")
+	mtqCsv              = flag.String("mtq-csv", "", "Managed Tenant Quota Operator CSV String")
 	operatorImage       = flag.String("operator-image-name", "", "HyperConverged Cluster Operator image")
 	webhookImage        = flag.String("webhook-image-name", "", "HyperConverged Cluster Webhook image")
 	cliDownloadsImage   = flag.String("cli-downloads-image-name", "", "Downloads Server image")
-	kvUiPluginImage     = flag.String("kubevirt-consoleplugin-image-name", "", "KubeVirt Console Plugin image")
+	kvUIPluginImage     = flag.String("kubevirt-consoleplugin-image-name", "", "KubeVirt Console Plugin image")
+	kvUIProxyImage      = flag.String("kubevirt-consoleproxy-image-name", "", "KubeVirt Console Proxy image")
 	kvVirtIOWinImage    = flag.String("kv-virtiowin-image-name", "", "KubeVirt VirtIO Win image")
 	smbios              = flag.String("smbios", "", "Custom SMBIOS string for KubeVirt ConfigMap")
 	machinetype         = flag.String("machinetype", "", "Custom MACHINETYPE string for KubeVirt ConfigMap")
@@ -114,8 +115,8 @@ var (
 	cdiVersion                    = flag.String("cdi-version", "", "CDI operator version")
 	cnaoVersion                   = flag.String("cnao-version", "", "CNA operator version")
 	sspVersion                    = flag.String("ssp-version", "", "SSP operator version")
-	ttoVersion                    = flag.String("tto-version", "", "Tekton tasks operator version")
 	hppoVersion                   = flag.String("hppo-version", "", "HPP operator version")
+	mtqVersion                    = flag.String("mtq-version", "", "MTQ operator version")
 	apiSources                    = flag.String("api-sources", cwd+"/...", "Project sources")
 	enableUniqueSemver            = flag.Bool("enable-unique-version", false, "Insert a skipRange annotation to support unique semver in the CSV")
 	skipsList                     = flag.String("skips-list", "",
@@ -125,15 +126,6 @@ var (
 
 	envVars EnvVarFlags
 )
-
-func genHcoCrds() error {
-	// Write out CRDs and CR
-	if err := util.MarshallObject(components.GetOperatorCRD(*apiSources), os.Stdout); err != nil {
-		return err
-	}
-
-	return nil
-}
 
 func IOReadDir(root string) ([]string, error) {
 	var files []string
@@ -264,7 +256,7 @@ func main() {
 
 	switch *outputMode {
 	case CRDMode:
-		panicOnError(genHcoCrds())
+		panicOnError(util.MarshallObject(components.GetOperatorCRD(*apiSources), os.Stdout))
 	case CSVMode:
 		getHcoCsv()
 
@@ -359,24 +351,20 @@ func getHiddenCrds(csvBase csvv1alpha1.ClusterServiceVersion) (string, error) {
 }
 
 func processCsvs(componentsWithCsvs []util.CsvWithComponent, installStrategyBase *csvv1alpha1.StrategyDetailsDeployment, csvBase *csvv1alpha1.ClusterServiceVersion, ris *[]csvv1alpha1.RelatedImage) {
-	for i, c := range componentsWithCsvs {
-		processOneCsv(c, i, installStrategyBase, csvBase, ris)
+	for _, c := range componentsWithCsvs {
+		processOneCsv(c, installStrategyBase, csvBase, ris)
 	}
 }
 
-var csvNames = []string{"CNA", "KubeVirt", "SSP", "TTO", "CDI", "HPP", "VM Import"}
-
-func processOneCsv(c util.CsvWithComponent, i int, installStrategyBase *csvv1alpha1.StrategyDetailsDeployment, csvBase *csvv1alpha1.ClusterServiceVersion, ris *[]csvv1alpha1.RelatedImage) {
-	csvName := csvNames[i]
-
+func processOneCsv(c util.CsvWithComponent, installStrategyBase *csvv1alpha1.StrategyDetailsDeployment, csvBase *csvv1alpha1.ClusterServiceVersion, ris *[]csvv1alpha1.RelatedImage) {
 	if c.Csv == "" {
-		log.Panicf("ERROR: the %s CSV was empty", csvName)
+		log.Panicf("ERROR: the %s CSV was empty", c.Name)
 	}
 	csvBytes := []byte(c.Csv)
 
 	csvStruct := &csvv1alpha1.ClusterServiceVersion{}
 
-	panicOnError(yaml.Unmarshal(csvBytes, csvStruct), "failed to unmarshal the CSV for", csvName)
+	panicOnError(yaml.Unmarshal(csvBytes, csvStruct), "failed to unmarshal the CSV for", c.Name)
 
 	strategySpec := csvStruct.Spec.InstallStrategy.StrategySpec
 
@@ -403,12 +391,12 @@ func processOneCsv(c util.CsvWithComponent, i int, installStrategyBase *csvv1alp
 		csvBaseAlmString = "[" + csvBaseAlmString + "]"
 	}
 
-	panicOnError(json.Unmarshal([]byte(csvBaseAlmString), &baseAlmcrs), "failed to unmarshal the example from base from base csv for", csvName, "csvBaseAlmString:", csvBaseAlmString)
-	panicOnError(json.Unmarshal([]byte(csvStructAlmString), &structAlmcrs), "failed to unmarshal the example from base from struct csv for", csvName, "csvStructAlmString:", csvStructAlmString)
+	panicOnError(json.Unmarshal([]byte(csvBaseAlmString), &baseAlmcrs), "failed to unmarshal the example from base from base csv for", c.Name, "csvBaseAlmString:", csvBaseAlmString)
+	panicOnError(json.Unmarshal([]byte(csvStructAlmString), &structAlmcrs), "failed to unmarshal the example from base from struct csv for", c.Name, "csvStructAlmString:", csvStructAlmString)
 
 	baseAlmcrs = append(baseAlmcrs, structAlmcrs...)
 	almB, err := json.Marshal(baseAlmcrs)
-	panicOnError(err, "failed to marshal the combined example for", csvName)
+	panicOnError(err, "failed to marshal the combined example for", c.Name)
 	csvBase.Annotations[almExamplesAnnotation] = string(almB)
 
 	if !*ignoreComponentsRelatedImages {
@@ -444,10 +432,10 @@ func setSupported(csvBase *csvv1alpha1.ClusterServiceVersion) {
 	if csvBase.Labels == nil {
 		csvBase.Labels = make(map[string]string)
 	}
-	for _, ele := range supported_archs {
+	for _, ele := range supportedArches {
 		csvBase.Labels[operatorFrameworkPrefix+ele] = supported
 	}
-	for _, ele := range supported_os {
+	for _, ele := range supportedOS {
 		csvBase.Labels[operatorFrameworkPrefix+ele] = supported
 	}
 }
@@ -455,28 +443,34 @@ func setSupported(csvBase *csvv1alpha1.ClusterServiceVersion) {
 func getInitialCsvList() []util.CsvWithComponent {
 	return []util.CsvWithComponent{
 		{
+			Name:      "CNA",
 			Csv:       *cnaCsv,
 			Component: hcoutil.AppComponentNetwork,
 		},
 		{
+			Name:      "KubeVirt",
 			Csv:       *virtCsv,
 			Component: hcoutil.AppComponentCompute,
 		},
 		{
+			Name:      "SSP",
 			Csv:       *sspCsv,
 			Component: hcoutil.AppComponentSchedule,
 		},
 		{
-			Csv:       *ttoCsv,
-			Component: hcoutil.AppComponentTekton,
-		},
-		{
+			Name:      "CDI",
 			Csv:       *cdiCsv,
 			Component: hcoutil.AppComponentStorage,
 		},
 		{
+			Name:      "HPP",
 			Csv:       *hppCsv,
 			Component: hcoutil.AppComponentStorage,
+		},
+		{
+			Name:      "MTQ",
+			Csv:       *mtqCsv,
+			Component: hcoutil.AppComponentMultiTenant,
 		},
 	}
 }
@@ -519,7 +513,8 @@ func getDeploymentParams() *components.DeploymentOperatorParams {
 		Image:              *operatorImage,
 		WebhookImage:       *webhookImage,
 		CliDownloadsImage:  *cliDownloadsImage,
-		KvUiPluginImage:    *kvUiPluginImage,
+		KVUIPluginImage:    *kvUIPluginImage,
+		KVUIProxyImage:     *kvUIProxyImage,
 		ImagePullPolicy:    "IfNotPresent",
 		VirtIOWinContainer: *kvVirtIOWinImage,
 		Smbios:             *smbios,
@@ -529,8 +524,8 @@ func getDeploymentParams() *components.DeploymentOperatorParams {
 		CdiVersion:         *cdiVersion,
 		CnaoVersion:        *cnaoVersion,
 		SspVersion:         *sspVersion,
-		TtoVersion:         *ttoVersion,
 		HppoVersion:        *hppoVersion,
+		MtqVersion:         *mtqVersion,
 		Env:                envVars,
 	}
 }

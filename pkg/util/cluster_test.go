@@ -10,13 +10,14 @@ import (
 	openshiftconfigv1 "github.com/openshift/api/config/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 var _ = Describe("test clusterInfo", func() {
+	const baseDomain = "basedomain"
 	var (
 		clusterVersion = &openshiftconfigv1.ClusterVersion{
 			ObjectMeta: metav1.ObjectMeta{
@@ -60,10 +61,61 @@ var _ = Describe("test clusterInfo", func() {
 				},
 			},
 		}
+
+		dns = &openshiftconfigv1.DNS{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster",
+			},
+			Spec: openshiftconfigv1.DNSSpec{
+				BaseDomain: baseDomain,
+			},
+		}
+
+		ipv4network = &openshiftconfigv1.Network{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster",
+			},
+			Status: openshiftconfigv1.NetworkStatus{
+				ClusterNetwork: []openshiftconfigv1.ClusterNetworkEntry{
+					{
+						CIDR: "10.128.0.0/14",
+					},
+				},
+			},
+		}
+
+		ipv6network = &openshiftconfigv1.Network{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster",
+			},
+			Status: openshiftconfigv1.NetworkStatus{
+				ClusterNetwork: []openshiftconfigv1.ClusterNetworkEntry{
+					{
+						CIDR: "fd01::/48",
+					},
+				},
+			},
+		}
+
+		dualStackNetwork = &openshiftconfigv1.Network{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster",
+			},
+			Status: openshiftconfigv1.NetworkStatus{
+				ClusterNetwork: []openshiftconfigv1.ClusterNetworkEntry{
+					{
+						CIDR: "fd01::/48",
+					},
+					{
+						CIDR: "10.128.0.0/14",
+					},
+				},
+			},
+		}
 	)
 
 	testScheme := scheme.Scheme
-	Expect(openshiftconfigv1.Install(testScheme)).ToNot(HaveOccurred())
+	Expect(openshiftconfigv1.Install(testScheme)).To(Succeed())
 
 	logger := zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)).WithName("clusterInfo_test")
 
@@ -72,8 +124,7 @@ var _ = Describe("test clusterInfo", func() {
 		cl := fake.NewClientBuilder().
 			WithScheme(testScheme).
 			Build()
-		err := GetClusterInfo().Init(context.TODO(), cl, logger)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
 
 		Expect(GetClusterInfo().IsOpenshift()).To(BeFalse(), "should return false for IsOpenshift()")
 		Expect(GetClusterInfo().IsManagedByOLM()).To(BeFalse(), "should return false for IsManagedByOLM()")
@@ -84,8 +135,7 @@ var _ = Describe("test clusterInfo", func() {
 		cl := fake.NewClientBuilder().
 			WithScheme(testScheme).
 			Build()
-		err := GetClusterInfo().Init(context.TODO(), cl, logger)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
 
 		Expect(GetClusterInfo().IsOpenshift()).To(BeFalse(), "should return false for IsOpenshift()")
 		Expect(GetClusterInfo().IsManagedByOLM()).To(BeTrue(), "should return true for IsManagedByOLM()")
@@ -95,13 +145,17 @@ var _ = Describe("test clusterInfo", func() {
 		os.Setenv(OperatorConditionNameEnvVar, "aValue")
 		cl := fake.NewClientBuilder().
 			WithScheme(testScheme).
-			WithRuntimeObjects(clusterVersion, infrastructure, ingress, apiServer).
+			WithObjects(clusterVersion, infrastructure, ingress, apiServer, dns, ipv4network).
+			WithStatusSubresource(clusterVersion, infrastructure, ingress, apiServer, dns, ipv4network).
 			Build()
-		err := GetClusterInfo().Init(context.TODO(), cl, logger)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
 
 		Expect(GetClusterInfo().IsOpenshift()).To(BeTrue(), "should return true for IsOpenshift()")
 		Expect(GetClusterInfo().IsManagedByOLM()).To(BeTrue(), "should return true for IsManagedByOLM()")
+
+		By("Check clusterInfo additional fields (for openshift)", func() {
+			Expect(GetClusterInfo().GetBaseDomain()).To(Equal(baseDomain), "should return expected base domain")
+		})
 	})
 
 	It("check Init on openshift, without OLM", func() {
@@ -109,13 +163,37 @@ var _ = Describe("test clusterInfo", func() {
 
 		cl := fake.NewClientBuilder().
 			WithScheme(testScheme).
-			WithRuntimeObjects(clusterVersion, infrastructure, ingress, apiServer).
+			WithObjects(clusterVersion, infrastructure, ingress, apiServer, dns, ipv4network).
+			WithStatusSubresource(clusterVersion, infrastructure, ingress, apiServer, dns, ipv4network).
 			Build()
-		err := GetClusterInfo().Init(context.TODO(), cl, logger)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
 
 		Expect(GetClusterInfo().IsOpenshift()).To(BeTrue(), "should return true for IsOpenshift()")
 		Expect(GetClusterInfo().IsManagedByOLM()).To(BeFalse(), "should return false for IsManagedByOLM()")
+	})
+
+	It("check init on OpenShift, with single-stack IPv6 network", func() {
+		cl := fake.NewClientBuilder().
+			WithScheme(testScheme).
+			WithObjects(clusterVersion, infrastructure, ingress, apiServer, dns, ipv6network).
+			WithStatusSubresource(clusterVersion, infrastructure, ingress, apiServer, dns, ipv6network).
+			Build()
+		Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
+
+		Expect(GetClusterInfo().IsOpenshift()).To(BeTrue())
+		Expect(GetClusterInfo().IsSingleStackIPv6()).To(BeTrue())
+	})
+
+	It("checks init on OpenShift with dual stack ipv4/ipv6 network configuration", func() {
+		cl := fake.NewClientBuilder().
+			WithScheme(testScheme).
+			WithObjects(clusterVersion, infrastructure, ingress, apiServer, dns, dualStackNetwork).
+			WithStatusSubresource(clusterVersion, infrastructure, ingress, apiServer, dns, dualStackNetwork).
+			Build()
+		Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
+
+		Expect(GetClusterInfo().IsOpenshift()).To(BeTrue())
+		Expect(GetClusterInfo().IsSingleStackIPv6()).To(BeFalse())
 	})
 
 	DescribeTable(
@@ -138,10 +216,10 @@ var _ = Describe("test clusterInfo", func() {
 			os.Setenv(OperatorConditionNameEnvVar, "aValue")
 			cl := fake.NewClientBuilder().
 				WithScheme(testScheme).
-				WithRuntimeObjects(clusterVersion, testInfrastructure, ingress, apiServer).
+				WithObjects(clusterVersion, testInfrastructure, ingress, apiServer, dns, ipv4network).
+				WithStatusSubresource(clusterVersion, testInfrastructure, ingress, apiServer, dns, ipv4network).
 				Build()
-			err := GetClusterInfo().Init(context.TODO(), cl, logger)
-			Expect(err).ToNot(HaveOccurred())
+			Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
 
 			Expect(GetClusterInfo().IsOpenshift()).To(BeTrue(), "should return true for IsOpenshift()")
 			Expect(GetClusterInfo().IsManagedByOLM()).To(BeTrue(), "should return true for IsManagedByOLM()")
@@ -182,7 +260,7 @@ var _ = Describe("test clusterInfo", func() {
 		"check Init on k8s, infrastructure topology ...",
 		func(numMasterNodes, numWorkerNodes int, expectedIsControlPlaneHighlyAvailable, expectedIsInfrastructureHighlyAvailable bool) {
 
-			var nodesArray []runtime.Object
+			var nodesArray []client.Object
 			for i := 0; i < numMasterNodes; i++ {
 				masterNode := &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
@@ -208,11 +286,11 @@ var _ = Describe("test clusterInfo", func() {
 			os.Unsetenv(OperatorConditionNameEnvVar)
 			cl := fake.NewClientBuilder().
 				WithScheme(testScheme).
-				WithRuntimeObjects(nodesArray...).
+				WithObjects(nodesArray...).
+				WithStatusSubresource(nodesArray...).
 				Build()
 
-			err := GetClusterInfo().Init(context.TODO(), cl, logger)
-			Expect(err).ToNot(HaveOccurred())
+			Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
 
 			Expect(GetClusterInfo().IsOpenshift()).To(BeFalse(), "should return false for IsOpenshift()")
 			Expect(GetClusterInfo().IsManagedByOLM()).To(BeFalse(), "should return false for IsManagedByOLM()")
@@ -255,7 +333,7 @@ var _ = Describe("test clusterInfo", func() {
 			"check TLSSecurityProfile on different configurations ...",
 			func(isOnOpenshift bool, clusterTLSSecurityProfile *openshiftconfigv1.TLSSecurityProfile, hcoTLSSecurityProfile *openshiftconfigv1.TLSSecurityProfile, expectedTLSSecurityProfile *openshiftconfigv1.TLSSecurityProfile) {
 
-				testApiServer := &openshiftconfigv1.APIServer{
+				testAPIServer := &openshiftconfigv1.APIServer{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "cluster",
 					},
@@ -272,11 +350,10 @@ var _ = Describe("test clusterInfo", func() {
 					os.Setenv(OperatorConditionNameEnvVar, "aValue")
 					cl = fake.NewClientBuilder().
 						WithScheme(testScheme).
-						WithRuntimeObjects(clusterVersion, infrastructure, ingress, testApiServer).
+						WithRuntimeObjects(clusterVersion, infrastructure, ingress, testAPIServer, dns, ipv4network).
 						Build()
 				}
-				err := GetClusterInfo().Init(context.TODO(), cl, logger)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
 
 				Expect(GetClusterInfo().IsOpenshift()).To(Equal(isOnOpenshift), "should return true for IsOpenshift()")
 				Expect(GetClusterInfo().GetTLSSecurityProfile(hcoTLSSecurityProfile)).To(Equal(expectedTLSSecurityProfile), "should return the expected TLSSecurityProfile")
@@ -433,7 +510,7 @@ var _ = Describe("test clusterInfo", func() {
 				Modern: &openshiftconfigv1.ModernTLSProfile{},
 			}
 
-			testApiServer := &openshiftconfigv1.APIServer{
+			testAPIServer := &openshiftconfigv1.APIServer{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "cluster",
 				},
@@ -444,23 +521,20 @@ var _ = Describe("test clusterInfo", func() {
 
 			cl := fake.NewClientBuilder().
 				WithScheme(testScheme).
-				WithRuntimeObjects(clusterVersion, infrastructure, ingress, testApiServer).
+				WithRuntimeObjects(clusterVersion, infrastructure, ingress, testAPIServer, dns, ipv4network).
 				Build()
-			err := GetClusterInfo().Init(context.TODO(), cl, logger)
-			Expect(err).ToNot(HaveOccurred())
+			Expect(GetClusterInfo().Init(context.TODO(), cl, logger)).To(Succeed())
 
 			Expect(GetClusterInfo().IsOpenshift()).To(BeTrue(), "should return true for IsOpenshift()")
 			Expect(GetClusterInfo().IsManagedByOLM()).To(BeTrue(), "should return true for IsManagedByOLM()")
 
 			Expect(GetClusterInfo().GetTLSSecurityProfile(nil)).To(Equal(initialTLSSecurityProfile), "should return the initial value")
 
-			testApiServer.Spec.TLSSecurityProfile = updatedTLSSecurityProfile
-			err = cl.Update(context.TODO(), testApiServer)
-			Expect(err).ToNot(HaveOccurred())
+			testAPIServer.Spec.TLSSecurityProfile = updatedTLSSecurityProfile
+			Expect(cl.Update(context.TODO(), testAPIServer)).To(Succeed())
 			Expect(GetClusterInfo().GetTLSSecurityProfile(nil)).To(Equal(initialTLSSecurityProfile), "should still return the cached value (initial value)")
 
-			err = GetClusterInfo().RefreshAPIServerCR(context.TODO(), cl)
-			Expect(err).ToNot(HaveOccurred())
+			Expect(GetClusterInfo().RefreshAPIServerCR(context.TODO(), cl)).To(Succeed())
 
 			Expect(GetClusterInfo().GetTLSSecurityProfile(nil)).To(Equal(updatedTLSSecurityProfile), "should return the updated value")
 

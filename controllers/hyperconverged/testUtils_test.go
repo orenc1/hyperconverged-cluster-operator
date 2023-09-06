@@ -8,10 +8,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	consolev1 "github.com/openshift/api/console/v1"
-	consolev1alpha1 "github.com/openshift/api/console/v1alpha1"
 	operatorv1 "github.com/openshift/api/operator/v1"
 	routev1 "github.com/openshift/api/route/v1"
 	conditionsv1 "github.com/openshift/custom-resource-status/conditions/v1"
+	csvv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	operatorsapiv2 "github.com/operator-framework/api/pkg/operators/v2"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -20,9 +20,8 @@ import (
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -30,15 +29,14 @@ import (
 	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/api/v1beta1"
 	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/alerts"
 	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/common"
-	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/commonTestUtils"
+	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/commontestutils"
 	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/operands"
 	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/components"
 	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
 	"github.com/kubevirt/hyperconverged-cluster-operator/version"
-	ttov1alpha1 "github.com/kubevirt/tekton-tasks-operator/api/v1alpha1"
 	kubevirtcorev1 "kubevirt.io/api/core/v1"
 	cdiv1beta1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
-	sspv1beta1 "kubevirt.io/ssp-operator/api/v1beta1"
+	sspv1beta2 "kubevirt.io/ssp-operator/api/v1beta2"
 )
 
 // Mock TestRequest to simulate Reconcile() being called on an event for a watched resource
@@ -52,9 +50,9 @@ var (
 )
 
 func initReconciler(client client.Client, old *ReconcileHyperConverged) *ReconcileHyperConverged {
-	s := commonTestUtils.GetScheme()
-	eventEmitter := commonTestUtils.NewEventEmitterMock()
-	ci := commonTestUtils.ClusterInfoMock{}
+	s := commontestutils.GetScheme()
+	eventEmitter := commontestutils.NewEventEmitterMock()
+	ci := commontestutils.ClusterInfoMock{}
 	operandHandler := operands.NewOperandHandler(client, s, ci, eventEmitter)
 	upgradeMode := false
 	firstLoop := true
@@ -117,8 +115,7 @@ type BasicExpected struct {
 	kv                   *kubevirtcorev1.KubeVirt
 	cdi                  *cdiv1beta1.CDI
 	cna                  *networkaddonsv1.NetworkAddonsConfig
-	ssp                  *sspv1beta1.SSP
-	tto                  *ttov1alpha1.TektonTasks
+	ssp                  *sspv1beta2.SSP
 	mService             *corev1.Service
 	serviceMonitor       *monitoringv1.ServiceMonitor
 	cliDownload          *consolev1.ConsoleCLIDownload
@@ -129,13 +126,16 @@ type BasicExpected struct {
 	virtioWinRoleBinding *rbacv1.RoleBinding
 	hcoCRD               *apiextensionsv1.CustomResourceDefinition
 	consolePluginDeploy  *appsv1.Deployment
+	consoleProxyDeploy   *appsv1.Deployment
 	consolePluginSvc     *corev1.Service
-	consolePlugin        *consolev1alpha1.ConsolePlugin
+	consoleProxySvc      *corev1.Service
+	consolePlugin        *consolev1.ConsolePlugin
 	consoleConfig        *operatorv1.Console
+	csv                  *csvv1alpha1.ClusterServiceVersion
 }
 
-func (be BasicExpected) toArray() []runtime.Object {
-	return []runtime.Object{
+func (be BasicExpected) toArray() []client.Object {
+	return []client.Object{
 		be.namespace,
 		be.hco,
 		be.pc,
@@ -143,7 +143,6 @@ func (be BasicExpected) toArray() []runtime.Object {
 		be.cdi,
 		be.cna,
 		be.ssp,
-		be.tto,
 		be.mService,
 		be.serviceMonitor,
 		be.cliDownload,
@@ -154,14 +153,17 @@ func (be BasicExpected) toArray() []runtime.Object {
 		be.virtioWinRoleBinding,
 		be.hcoCRD,
 		be.consolePluginDeploy,
+		be.consoleProxyDeploy,
 		be.consolePluginSvc,
+		be.consoleProxySvc,
 		be.consolePlugin,
 		be.consoleConfig,
+		be.csv,
 	}
 }
 
-func (be BasicExpected) initClient() *commonTestUtils.HcoTestClient {
-	return commonTestUtils.InitClient(be.toArray())
+func (be BasicExpected) initClient() *commontestutils.HcoTestClient {
+	return commontestutils.InitClient(be.toArray())
 }
 
 func getBasicDeployment() *BasicExpected {
@@ -212,8 +214,8 @@ func getBasicDeployment() *BasicExpected {
 		Kind:               "Deployment",
 		Name:               "hco-operator",
 		UID:                "1234567890",
-		BlockOwnerDeletion: pointer.Bool(false),
-		Controller:         pointer.Bool(false),
+		BlockOwnerDeletion: ptr.To(false),
+		Controller:         ptr.To(false),
 	}
 	res.mService = alerts.NewMetricsService(namespace, deploymentRef)
 	res.serviceMonitor = alerts.NewServiceMonitor(namespace, deploymentRef)
@@ -253,10 +255,6 @@ func getBasicDeployment() *BasicExpected {
 	expectedSSP.Status.Conditions = getGenericCompletedConditions()
 	res.ssp = expectedSSP
 
-	expectedTTO := operands.NewTTO(hco)
-	expectedTTO.Status.Conditions = getGenericCompletedConditions()
-	res.tto = expectedTTO
-
 	expectedCliDownload := operands.NewConsoleCLIDownload(hco)
 	res.cliDownload = expectedCliDownload
 
@@ -276,14 +274,19 @@ func getBasicDeployment() *BasicExpected {
 	expectedVirtioWinRoleBinding := operands.NewVirtioWinCmReaderRoleBinding(hco)
 	res.virtioWinRoleBinding = expectedVirtioWinRoleBinding
 
-	expectedConsolePluginDeployment, err := operands.NewKvUiPluginDeplymnt(hco)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	expectedConsolePluginDeployment := operands.NewKvUIPluginDeployment(hco)
 	res.consolePluginDeploy = expectedConsolePluginDeployment
 
-	expectedConsolePluginService := operands.NewKvUiPluginSvc(hco)
+	expectedConsoleProxyDeployment := operands.NewKvUIProxyDeployment(hco)
+	res.consoleProxyDeploy = expectedConsoleProxyDeployment
+
+	expectedConsolePluginService := operands.NewKvUIPluginSvc(hco)
 	res.consolePluginSvc = expectedConsolePluginService
 
-	expectedConsolePlugin := operands.NewKvConsolePlugin(hco)
+	expectedConsoleProxyService := operands.NewKvUIProxySvc(hco)
+	res.consoleProxySvc = expectedConsoleProxyService
+
+	expectedConsolePlugin := operands.NewKVConsolePlugin(hco)
 	res.consolePlugin = expectedConsolePlugin
 
 	expectedConsoleConfig := &operatorv1.Console{
@@ -303,6 +306,9 @@ func getBasicDeployment() *BasicExpected {
 		},
 	}
 	res.hcoCRD = hcoCrd
+
+	csv := hcoutil.GetClusterInfo().GetCSV()
+	res.csv = csv
 
 	return res
 }
@@ -375,6 +381,6 @@ func checkAvailability(hco *hcov1beta1.HyperConverged, expected metav1.Condition
 	}
 
 	if !found {
-		Fail(fmt.Sprintf(`Can't find 'Available' condition; %v`, hco.Status.Conditions))
+		Fail(fmt.Sprintf(`Can't find 'Available' condition; %+v`, hco.Status.Conditions))
 	}
 }

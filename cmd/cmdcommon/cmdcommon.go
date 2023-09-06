@@ -72,9 +72,8 @@ func (h HcCmdHelper) RegisterPPROFServer(mgr manager.Manager) error {
 	return mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		errCh := make(chan error)
 		defer func() {
-			for range errCh {
-				// drain errCh for GC
-			}
+			// drain errCh for GC
+			<-errCh
 		}()
 
 		go func() {
@@ -91,16 +90,6 @@ func (h HcCmdHelper) RegisterPPROFServer(mgr manager.Manager) error {
 			return nil
 		}
 	}))
-}
-
-func (h HcCmdHelper) GetWatchNS() string {
-	if !h.runInLocal {
-		watchNamespace, err := hcoutil.GetWatchNamespace()
-		h.ExitOnError(err, "Failed to get watch namespace")
-		return watchNamespace
-	}
-
-	return ""
 }
 
 func (h HcCmdHelper) ExitOnError(err error, message string, keysAndValues ...interface{}) {

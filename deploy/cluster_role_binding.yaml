@@ -51,22 +51,6 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   labels:
-    name: tekton-tasks-operator
-  name: tekton-tasks-operator
-  namespace: kubevirt-hyperconverged
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: tekton-tasks-operator
-subjects:
-- kind: ServiceAccount
-  name: tekton-tasks-operator
-  namespace: kubevirt-hyperconverged
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  labels:
     name: cdi-operator
   name: cdi-operator
   namespace: kubevirt-hyperconverged
@@ -93,6 +77,22 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: hostpath-provisioner-operator
+  namespace: kubevirt-hyperconverged
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    name: mtq-operator
+  name: mtq-operator
+  namespace: kubevirt-hyperconverged
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mtq-operator
+subjects:
+- kind: ServiceAccount
+  name: mtq-operator
   namespace: kubevirt-hyperconverged
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -159,21 +159,6 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   labels:
-    name: tekton-tasks-operator
-  name: tekton-tasks-operator
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: tekton-tasks-operator
-subjects:
-- kind: ServiceAccount
-  name: tekton-tasks-operator
-  namespace: kubevirt-hyperconverged
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  labels:
     name: cdi-operator
   name: cdi-operator
 roleRef:
@@ -198,4 +183,19 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: hostpath-provisioner-operator
+  namespace: kubevirt-hyperconverged
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    name: mtq-operator
+  name: mtq-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mtq-operator
+subjects:
+- kind: ServiceAccount
+  name: mtq-operator
   namespace: kubevirt-hyperconverged

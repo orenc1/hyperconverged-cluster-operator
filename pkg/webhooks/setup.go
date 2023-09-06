@@ -2,11 +2,10 @@ package webhooks
 
 import (
 	"context"
-	"crypto/tls"
 	"os"
-	"path/filepath"
 
 	openshiftconfigv1 "github.com/openshift/api/config/v1"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/webhooks/mutator"
 	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/webhooks/validator"
@@ -29,6 +28,32 @@ var (
 	logger = logf.Log.WithName("webhook-setup")
 )
 
+func SetupWebhookWithManager(ctx context.Context, mgr ctrl.Manager, isOpenshift bool, hcoTLSSecurityProfile *openshiftconfigv1.TLSSecurityProfile) error {
+	operatorNsEnv, nserr := hcoutil.GetOperatorNamespaceFromEnv()
+	if nserr != nil {
+		logger.Error(nserr, "failed to get operator namespace from the environment")
+		return nserr
+	}
+
+	decoder := admission.NewDecoder(mgr.GetScheme())
+
+	whHandler := validator.NewWebhookHandler(logger, mgr.GetClient(), decoder, operatorNsEnv, isOpenshift, hcoTLSSecurityProfile)
+	nsMutator := mutator.NewNsMutator(mgr.GetClient(), decoder, operatorNsEnv)
+	hyperConvergedMutator := mutator.NewHyperConvergedMutator(mgr.GetClient(), decoder)
+
+	if err := allowWatchAllNamespaces(ctx, mgr); err != nil {
+		return err
+	}
+
+	srv := mgr.GetWebhookServer()
+
+	srv.Register(hcoutil.HCONSWebhookPath, &webhook.Admission{Handler: nsMutator})
+	srv.Register(hcoutil.HCOMutatingWebhookPath, &webhook.Admission{Handler: hyperConvergedMutator})
+	srv.Register(hcoutil.HCOWebhookPath, &webhook.Admission{Handler: whHandler})
+
+	return nil
+}
+
 func GetWebhookCertDir() string {
 	webhookCertDir := os.Getenv(webHookCertDirEnv)
 	if webhookCertDir != "" {
@@ -36,45 +61,6 @@ func GetWebhookCertDir() string {
 	}
 
 	return hcoutil.DefaultWebhookCertDir
-}
-
-func SetupWebhookWithManager(ctx context.Context, mgr ctrl.Manager, isOpenshift bool, hcoTlsSecurityProfile *openshiftconfigv1.TLSSecurityProfile) error {
-	operatorNsEnv, nserr := hcoutil.GetOperatorNamespaceFromEnv()
-	if nserr != nil {
-		logger.Error(nserr, "failed to get operator namespace from the environment")
-		return nserr
-	}
-
-	whHandler := validator.NewWebhookHandler(logger, mgr.GetClient(), operatorNsEnv, isOpenshift, hcoTlsSecurityProfile)
-
-	nsMutator := mutator.NewNsMutator(mgr.GetClient(), operatorNsEnv)
-
-	// Make sure the certificates are mounted, this should be handled by the OLM
-	webhookCertDir := GetWebhookCertDir()
-	certs := []string{filepath.Join(webhookCertDir, hcoutil.WebhookCertName), filepath.Join(webhookCertDir, hcoutil.WebhookKeyName)}
-	for _, fname := range certs {
-		if _, err := os.Stat(fname); err != nil {
-			logger.Error(err, "CSV certificates were not found, skipping webhook initialization")
-			return err
-		}
-	}
-
-	if err := allowWatchAllNamespaces(ctx, mgr); err != nil {
-		return err
-	}
-
-	srv := mgr.GetWebhookServer()
-	srv.CertDir = GetWebhookCertDir()
-	srv.CertName = hcoutil.WebhookCertName
-	srv.KeyName = hcoutil.WebhookKeyName
-	srv.Port = hcoutil.WebhookPort
-
-	srv.TLSOpts = []func(*tls.Config){whHandler.MutateTLSConfig}
-
-	srv.Register(hcoutil.HCONSWebhookPath, &webhook.Admission{Handler: nsMutator})
-	srv.Register(hcoutil.HCOWebhookPath, &webhook.Admission{Handler: whHandler})
-
-	return nil
 }
 
 // The OLM limits the webhook scope to the namespaces that are defined in the OperatorGroup

@@ -16,7 +16,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * Copyright 2022 Red Hat, Inc.
+ * Copyright 2023 Red Hat, Inc.
  *
  */
 
@@ -52,9 +52,29 @@ func SetObjectDefaults_HyperConverged(in *HyperConverged) {
 		var ptrVar1 bool = false
 		in.Spec.FeatureGates.DeployTektonTaskResources = &ptrVar1
 	}
+	if in.Spec.FeatureGates.DeployVMConsoleProxy == nil {
+		var ptrVar1 bool = false
+		in.Spec.FeatureGates.DeployVMConsoleProxy = &ptrVar1
+	}
+	if in.Spec.FeatureGates.DeployKubeSecondaryDNS == nil {
+		var ptrVar1 bool = false
+		in.Spec.FeatureGates.DeployKubeSecondaryDNS = &ptrVar1
+	}
 	if in.Spec.FeatureGates.NonRoot == nil {
 		var ptrVar1 bool = true
 		in.Spec.FeatureGates.NonRoot = &ptrVar1
+	}
+	if in.Spec.FeatureGates.DisableMDevConfiguration == nil {
+		var ptrVar1 bool = false
+		in.Spec.FeatureGates.DisableMDevConfiguration = &ptrVar1
+	}
+	if in.Spec.FeatureGates.PersistentReservation == nil {
+		var ptrVar1 bool = false
+		in.Spec.FeatureGates.PersistentReservation = &ptrVar1
+	}
+	if in.Spec.FeatureGates.EnableManagedTenantQuota == nil {
+		var ptrVar1 bool = false
+		in.Spec.FeatureGates.EnableManagedTenantQuota = &ptrVar1
 	}
 	if in.Spec.LiveMigrationConfig.ParallelMigrationsPerCluster == nil {
 		var ptrVar1 uint32 = 5
@@ -71,6 +91,14 @@ func SetObjectDefaults_HyperConverged(in *HyperConverged) {
 	if in.Spec.LiveMigrationConfig.ProgressTimeout == nil {
 		var ptrVar1 int64 = 150
 		in.Spec.LiveMigrationConfig.ProgressTimeout = &ptrVar1
+	}
+	if in.Spec.LiveMigrationConfig.AllowAutoConverge == nil {
+		var ptrVar1 bool = false
+		in.Spec.LiveMigrationConfig.AllowAutoConverge = &ptrVar1
+	}
+	if in.Spec.LiveMigrationConfig.AllowPostCopy == nil {
+		var ptrVar1 bool = false
+		in.Spec.LiveMigrationConfig.AllowPostCopy = &ptrVar1
 	}
 	if in.Spec.CertConfig.CA.Duration == nil {
 		if err := json.Unmarshal([]byte(`"48h0m0s"`), &in.Spec.CertConfig.CA.Duration); err != nil {
@@ -92,6 +120,12 @@ func SetObjectDefaults_HyperConverged(in *HyperConverged) {
 			panic(err)
 		}
 	}
+	if in.Spec.ResourceRequirements != nil {
+		if in.Spec.ResourceRequirements.VmiCPUAllocationRatio == nil {
+			var ptrVar1 int = 10
+			in.Spec.ResourceRequirements.VmiCPUAllocationRatio = &ptrVar1
+		}
+	}
 	if in.Spec.WorkloadUpdateStrategy.WorkloadUpdateMethods == nil {
 		if err := json.Unmarshal([]byte(`["LiveMigrate"]`), &in.Spec.WorkloadUpdateStrategy.WorkloadUpdateMethods); err != nil {
 			panic(err)
@@ -108,6 +142,16 @@ func SetObjectDefaults_HyperConverged(in *HyperConverged) {
 	}
 	if in.Spec.UninstallStrategy == "" {
 		in.Spec.UninstallStrategy = "BlockUninstallIfWorkloadsExist"
+	}
+	if in.Spec.VirtualMachineOptions == nil {
+		if err := json.Unmarshal([]byte(`{"disableFreePageReporting": true}`), &in.Spec.VirtualMachineOptions); err != nil {
+			panic(err)
+		}
+	}
+	if in.Spec.VirtualMachineOptions != nil {
+		if in.Spec.VirtualMachineOptions.DisableFreePageReporting == false {
+			in.Spec.VirtualMachineOptions.DisableFreePageReporting = true
+		}
 	}
 }
 

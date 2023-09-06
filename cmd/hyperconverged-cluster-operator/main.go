@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"os"
 
+	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
 	openshiftconfigv1 "github.com/openshift/api/config/v1"
 	consolev1 "github.com/openshift/api/console/v1"
-	consolev1alpha1 "github.com/openshift/api/console/v1alpha1"
 	imagev1 "github.com/openshift/api/image/v1"
 	operatorv1 "github.com/openshift/api/operator/v1"
 	openshiftroutev1 "github.com/openshift/api/route/v1"
@@ -45,10 +46,10 @@ import (
 	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/hyperconverged"
 	"github.com/kubevirt/hyperconverged-cluster-operator/controllers/operands"
 	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
-	ttov1alpha1 "github.com/kubevirt/tekton-tasks-operator/api/v1alpha1"
 	kubevirtcorev1 "kubevirt.io/api/core/v1"
 	cdiv1beta1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
-	sspv1beta1 "kubevirt.io/ssp-operator/api/v1beta1"
+	mtqv1alpha1 "kubevirt.io/managed-tenant-quota/staging/src/kubevirt.io/managed-tenant-quota-api/pkg/apis/core/v1alpha1"
+	sspv1beta2 "kubevirt.io/ssp-operator/api/v1beta2"
 )
 
 // Change below variables to serve metrics on different host or port.
@@ -63,12 +64,11 @@ var (
 		rbacv1.AddToScheme,
 		cdiv1beta1.AddToScheme,
 		networkaddonsv1.AddToScheme,
-		sspv1beta1.AddToScheme,
-		ttov1alpha1.AddToScheme,
+		sspv1beta2.AddToScheme,
 		csvv1alpha1.AddToScheme,
 		admissionregistrationv1.AddToScheme,
 		consolev1.Install,
-		consolev1alpha1.Install,
+		consolev1.Install,
 		operatorv1.Install,
 		openshiftconfigv1.Install,
 		openshiftroutev1.Install,
@@ -78,13 +78,13 @@ var (
 		coordinationv1.AddToScheme,
 		operatorsapiv2.AddToScheme,
 		imagev1.Install,
+		mtqv1alpha1.AddToScheme,
 	}
 )
 
 func main() {
 	cmdHelper.InitiateCommand()
 
-	watchNamespace := cmdHelper.GetWatchNS()
 	operatorNamespace, err := hcoutil.GetOperatorNamespaceFromEnv()
 	cmdHelper.ExitOnError(err, "can't get operator expected namespace")
 
@@ -92,27 +92,17 @@ func main() {
 	cfg, err := config.GetConfig()
 	cmdHelper.ExitOnError(err, "can't load configuration")
 
-	ci := hcoutil.GetClusterInfo()
-	needLeaderElection := !ci.IsRunningLocally()
-
 	// Setup Scheme for all resources
 	scheme := apiruntime.NewScheme()
 	cmdHelper.AddToScheme(scheme, resourcesSchemeFuncs)
 
-	// Create a new Cmd to provide shared dependencies and start components
-	mgr, err := manager.New(cfg, getManagerOptions(watchNamespace, operatorNamespace, needLeaderElection, scheme))
-	cmdHelper.ExitOnError(err, "can't initiate manager")
-
-	// register pprof instrumentation if HCO_PPROF_ADDR is set
-	cmdHelper.ExitOnError(cmdHelper.RegisterPPROFServer(mgr), "can't register pprof server")
-
-	logger.Info("Registering Components.")
+	ci := hcoutil.GetClusterInfo()
 
 	// apiclient.New() returns a client without cache.
 	// cache is not initialized before mgr.Start()
 	// we need this because we need to interact with OperatorCondition
-	apiClient, err := client.New(mgr.GetConfig(), client.Options{
-		Scheme: mgr.GetScheme(),
+	apiClient, err := client.New(cfg, client.Options{
+		Scheme: scheme,
 	})
 	cmdHelper.ExitOnError(err, "Cannot create a new API client")
 
@@ -120,6 +110,17 @@ func main() {
 	ctx := context.TODO()
 	err = ci.Init(ctx, apiClient, logger)
 	cmdHelper.ExitOnError(err, "Cannot detect cluster type")
+
+	needLeaderElection := !ci.IsRunningLocally()
+
+	// Create a new Cmd to provide shared dependencies and start components
+	mgr, err := manager.New(cfg, getManagerOptions(operatorNamespace, needLeaderElection, ci.IsMonitoringAvailable(), ci.IsOpenshift(), scheme))
+	cmdHelper.ExitOnError(err, "can't initiate manager")
+
+	// register pprof instrumentation if HCO_PPROF_ADDR is set
+	cmdHelper.ExitOnError(cmdHelper.RegisterPPROFServer(mgr), "can't register pprof server")
+
+	logger.Info("Registering Components.")
 
 	eventEmitter := hcoutil.GetEventEmitter()
 	eventEmitter.Init(ci.GetPod(), ci.GetCSV(), mgr.GetEventRecorderFor(hcoutil.HyperConvergedName))
@@ -180,83 +181,111 @@ func main() {
 
 // Restricts the cache's ListWatch to specific fields/labels per GVK at the specified object to control the memory impact
 // this is used to completely overwrite the NewCache function so all the interesting objects should be explicitly listed here
-func getNewManagerCache(operatorNamespace string) cache.NewCacheFunc {
+func getCacheOption(operatorNamespace string, isMonitoringAvailable, isOpenshift bool) cache.Options {
 	namespaceSelector := fields.Set{"metadata.namespace": operatorNamespace}.AsSelector()
 	labelSelector := labels.Set{hcoutil.AppLabel: hcoutil.HyperConvergedName}.AsSelector()
 	labelSelectorForNamespace := labels.Set{hcoutil.KubernetesMetadataName: operatorNamespace}.AsSelector()
-	return cache.BuilderWithOptions(
-		cache.Options{
-			SelectorsByObject: cache.SelectorsByObject{
-				&hcov1beta1.HyperConverged{}:           {},
-				&kubevirtcorev1.KubeVirt{}:             {},
-				&cdiv1beta1.CDI{}:                      {},
-				&networkaddonsv1.NetworkAddonsConfig{}: {},
-				&sspv1beta1.SSP{}:                      {},
-				&ttov1alpha1.TektonTasks{}:             {},
-				&schedulingv1.PriorityClass{}: {
-					Label: labels.SelectorFromSet(labels.Set{hcoutil.AppLabel: hcoutil.HyperConvergedName}),
-				},
-				&corev1.ConfigMap{}: {
-					Label: labelSelector,
-				},
-				&corev1.Service{}: {
-					Field: namespaceSelector,
-				},
-				&corev1.Endpoints{}: {
-					Field: namespaceSelector,
-				},
-				&monitoringv1.ServiceMonitor{}: {
-					Label: labelSelector,
-					Field: namespaceSelector,
-				},
-				&monitoringv1.PrometheusRule{}: {
-					Label: labelSelector,
-					Field: namespaceSelector,
-				},
-				&rbacv1.Role{}: {
-					Label: labelSelector,
-					Field: namespaceSelector,
-				},
-				&rbacv1.RoleBinding{}: {
-					Label: labelSelector,
-					Field: namespaceSelector,
-				},
-				&openshiftroutev1.Route{}: {
-					Field: namespaceSelector,
-				},
-				&imagev1.ImageStream{}: {
-					Label: labelSelector,
-				},
-				&corev1.Namespace{}: {
-					Label: labelSelectorForNamespace,
-				},
-				&openshiftconfigv1.APIServer{}: {},
-				&consolev1.ConsoleCLIDownload{}: {
-					Label: labelSelector,
-				},
-				&consolev1.ConsoleQuickStart{}: {
-					Label: labelSelector,
-				},
-				&appsv1.Deployment{}: {
-					Label: labelSelector,
-					Field: namespaceSelector,
-				},
+
+	cacheOptions := cache.Options{
+		ByObject: map[client.Object]cache.ByObject{
+			&hcov1beta1.HyperConverged{}:           {},
+			&kubevirtcorev1.KubeVirt{}:             {},
+			&cdiv1beta1.CDI{}:                      {},
+			&networkaddonsv1.NetworkAddonsConfig{}: {},
+			&sspv1beta2.SSP{}:                      {},
+			&mtqv1alpha1.MTQ{}:                     {},
+			&schedulingv1.PriorityClass{}: {
+				Label: labels.SelectorFromSet(labels.Set{hcoutil.AppLabel: hcoutil.HyperConvergedName}),
 			},
+			&corev1.ConfigMap{}: {
+				Label: labelSelector,
+			},
+			&corev1.Service{}: {
+				Field: namespaceSelector,
+			},
+			&corev1.Endpoints{}: {
+				Field: namespaceSelector,
+			},
+			&rbacv1.Role{}: {
+				Label: labelSelector,
+				Field: namespaceSelector,
+			},
+			&rbacv1.RoleBinding{}: {
+				Label: labelSelector,
+				Field: namespaceSelector,
+			},
+			&corev1.Namespace{}: {
+				Label: labelSelectorForNamespace,
+			},
+			&appsv1.Deployment{}: {
+				Label: labelSelector,
+				Field: namespaceSelector,
+			},
+			&apiextensionsv1.CustomResourceDefinition{}: {},
 		},
-	)
+	}
+
+	cacheOptionsByOjectForMonitoring := map[client.Object]cache.ByObject{
+		&monitoringv1.ServiceMonitor{}: {
+			Label: labelSelector,
+			Field: namespaceSelector,
+		},
+		&monitoringv1.PrometheusRule{}: {
+			Label: labelSelector,
+			Field: namespaceSelector,
+		},
+	}
+
+	cacheOptionsByOjectForOpenshift := map[client.Object]cache.ByObject{
+		&openshiftroutev1.Route{}: {
+			Field: namespaceSelector,
+		},
+		&imagev1.ImageStream{}: {
+			Label: labelSelector,
+		},
+		&openshiftconfigv1.APIServer{}: {},
+		&consolev1.ConsoleCLIDownload{}: {
+			Label: labelSelector,
+		},
+		&consolev1.ConsoleQuickStart{}: {
+			Label: labelSelector,
+		},
+		&consolev1.ConsolePlugin{}: {
+			Label: labelSelector,
+		},
+	}
+
+	if isMonitoringAvailable {
+		for k, v := range cacheOptionsByOjectForMonitoring {
+			cacheOptions.ByObject[k] = v
+		}
+	}
+	if isOpenshift {
+		for k, v := range cacheOptionsByOjectForOpenshift {
+			cacheOptions.ByObject[k] = v
+		}
+	}
+
+	return cacheOptions
+
 }
 
-func getManagerOptions(watchNamespace string, operatorNamespace string, needLeaderElection bool, scheme *apiruntime.Scheme) manager.Options {
+func getManagerOptions(operatorNamespace string, needLeaderElection, isMonitoringAvailable, isOpenshift bool, scheme *apiruntime.Scheme) manager.Options {
 	return manager.Options{
-		Namespace:                  watchNamespace, // to be able to watch objects also in other namespaces
-		MetricsBindAddress:         fmt.Sprintf("%s:%d", hcoutil.MetricsHost, hcoutil.MetricsPort),
-		HealthProbeBindAddress:     fmt.Sprintf("%s:%d", hcoutil.HealthProbeHost, hcoutil.HealthProbePort),
-		ReadinessEndpointName:      hcoutil.ReadinessEndpointName,
-		LivenessEndpointName:       hcoutil.LivenessEndpointName,
-		LeaderElection:             needLeaderElection,
-		LeaderElectionResourceLock: resourcelock.ConfigMapsLeasesResourceLock,
+		Metrics: server.Options{
+			BindAddress: fmt.Sprintf("%s:%d", hcoutil.MetricsHost, hcoutil.MetricsPort),
+		},
+		HealthProbeBindAddress: fmt.Sprintf("%s:%d", hcoutil.HealthProbeHost, hcoutil.HealthProbePort),
+		ReadinessEndpointName:  hcoutil.ReadinessEndpointName,
+		LivenessEndpointName:   hcoutil.LivenessEndpointName,
+		LeaderElection:         needLeaderElection,
+		// We set ConfigMapsLeasesResourceLock already in release-1.5 to migrate from configmaps to leases.
+		// Since we used "configmapsleases" for over two years, spanning five minor releases,
+		// any actively maintained operators are very likely to have a released version that uses
+		// "configmapsleases". Therefore, having only "leases" should be safe now.
+		LeaderElectionResourceLock: resourcelock.LeasesResourceLock,
 		LeaderElectionID:           "hyperconverged-cluster-operator-lock",
-		NewCache:                   getNewManagerCache(operatorNamespace),
+		Cache:                      getCacheOption(operatorNamespace, isMonitoringAvailable, isOpenshift),
 		Scheme:                     scheme,
 	}
 }

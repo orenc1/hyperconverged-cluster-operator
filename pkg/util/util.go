@@ -3,11 +3,14 @@ package util
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
 	"strings"
 	"time"
+
+	"k8s.io/client-go/discovery"
 
 	"github.com/go-logr/logr"
 	objectreferencesv1 "github.com/openshift/custom-resource-status/objectreferences/v1"
@@ -31,11 +34,6 @@ type RunModeType string
 const (
 	LocalRunMode   RunModeType = "local"
 	ClusterRunMode RunModeType = "cluster"
-
-	// WatchNamespaceEnvVar is the constant for env variable WATCH_NAMESPACE
-	// which is the namespace where the watch activity happens.
-	// this value is empty if the operator is running with clusterScope.
-	WatchNamespaceEnvVar = "WATCH_NAMESPACE"
 
 	// PodNameEnvVar is the constant for env variable POD_NAME
 	// which is the name of the current pod.
@@ -79,15 +77,6 @@ var GetOperatorNamespace = func(logger logr.Logger) (string, error) {
 	return ns, nil
 }
 
-// GetWatchNamespace returns the namespace the operator should be watching for changes
-func GetWatchNamespace() (string, error) {
-	ns, found := os.LookupEnv(WatchNamespaceEnvVar)
-	if !found {
-		return "", fmt.Errorf("%s must be set", WatchNamespaceEnvVar)
-	}
-	return ns, nil
-}
-
 // ToUnstructured converts an arbitrary object (which MUST obey the
 // k8s object conventions) to an Unstructured
 func ToUnstructured(obj interface{}) (*unstructured.Unstructured, error) {
@@ -103,7 +92,7 @@ func ToUnstructured(obj interface{}) (*unstructured.Unstructured, error) {
 }
 
 // GetRuntimeObject will query the apiserver for the object
-func GetRuntimeObject(ctx context.Context, c client.Client, obj client.Object, logger logr.Logger) error {
+func GetRuntimeObject(ctx context.Context, c client.Client, obj client.Object) error {
 	key := client.ObjectKeyFromObject(obj)
 	return c.Get(ctx, key, obj)
 }
@@ -208,10 +197,11 @@ func validateDeletion(ctx context.Context, c client.Client, resource *unstructur
 // EnsureDeleted calls ComponentResourceRemoval if the runtime object exists
 // with wait=true it will wait, (util ctx timeout, please set it!) for the resource to be effectively deleted
 func EnsureDeleted(ctx context.Context, c client.Client, obj client.Object, hcoName string, logger logr.Logger, dryRun bool, wait bool, protectNonHCOObjects bool) (bool, error) {
-	err := GetRuntimeObject(ctx, c, obj, logger)
+	err := GetRuntimeObject(ctx, c, obj)
 
 	if err != nil {
-		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+		var gdferr *discovery.ErrGroupDiscoveryFailed
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) || errors.As(err, &gdferr) {
 			logger.Info("Resource doesn't exist, there is nothing to remove", "Kind", obj.GetObjectKind())
 			return false, nil
 		}
@@ -256,6 +246,15 @@ func AddCrToTheRelatedObjectList(relatedObjects *[]corev1.ObjectReference, found
 		err = objectreferencesv1.SetObjectReference(relatedObjects, *objectRef)
 		if err != nil {
 			return false, err
+		}
+		// Eventually remove outdated reference with a different APIVersion
+		for _, ref := range *relatedObjects {
+			if ref.Kind == objectRef.Kind && ref.Namespace == objectRef.Namespace && ref.Name == objectRef.Name && ref.APIVersion != objectRef.APIVersion {
+				err = objectreferencesv1.RemoveObjectReference(relatedObjects, ref)
+				if err != nil {
+					return false, err
+				}
+			}
 		}
 		return true, nil
 	}
