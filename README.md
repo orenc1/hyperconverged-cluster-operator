@@ -123,8 +123,8 @@ sed -i "s|+ARTIFACTS_SERVER_IMAGE_TO_REPLACE+|${ARTIFACTS_SERVER_IMAGE}|g" deplo
 ```
 
 Create the namespace for the HCO.
-```bash
-kubectl create ns kubevirt-hyperconverged
+```console
+$ kubectl create ns kubevirt-hyperconverged
 ```
 
 For the next set of commands, we will use the
